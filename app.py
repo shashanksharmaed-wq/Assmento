@@ -20,7 +20,7 @@ EMBED_MODEL = "text-embedding-3-large"
 SIM_THRESHOLD = 0.85
 
 # =========================
-# LOAD TSV (AUTO-DETECT)
+# LOAD TSV (SAFE)
 # =========================
 
 @st.cache_data
@@ -31,11 +31,22 @@ def load_syllabus():
 
 df = load_syllabus()
 
-# detect columns safely
-CLASS_COL = [c for c in df.columns if c.lower() == "class"][0]
-SUBJECT_COL = [c for c in df.columns if c.lower() == "subject"][0]
-CHAPTER_COL = next((c for c in df.columns if c.lower() == "chapter"), None)
-LO_COL = next((c for c in df.columns if c.lower() in ["lo", "learning_outcome", "learning outcome"]), None)
+# ---------- SAFE COLUMN DETECTION ----------
+
+def find_col(possible_names):
+    for col in df.columns:
+        if col.lower().replace(" ", "_") in possible_names:
+            return col
+    return None
+
+CLASS_COL = find_col({"class", "grade", "std", "class_name", "grade_level"})
+SUBJECT_COL = find_col({"subject"})
+CHAPTER_COL = find_col({"chapter", "unit"})
+LO_COL = find_col({"lo", "learning_outcome", "learning outcome", "objective"})
+
+if not CLASS_COL or not SUBJECT_COL:
+    st.error("Required columns (Class / Subject) not found in TSV")
+    st.stop()
 
 # =========================
 # DATABASE
@@ -48,7 +59,7 @@ cur.execute("""
 CREATE TABLE IF NOT EXISTS questions (
     id TEXT PRIMARY KEY,
     school_id TEXT,
-    class INTEGER,
+    class TEXT,
     subject TEXT,
     chapter TEXT,
     lo TEXT,
@@ -63,15 +74,15 @@ CREATE TABLE IF NOT EXISTS questions (
 conn.commit()
 
 # =========================
-# EMBEDDING + FAISS
+# EMBEDDING + FAISS (SAFE)
 # =========================
 
 def embed(text):
     r = openai.embeddings.create(model=EMBED_MODEL, input=text)
     return np.array(r.data[0].embedding, dtype="float32")
 
-_test = embed("init")
-EMBED_DIM = _test.shape[0]
+_test_vec = embed("init")
+EMBED_DIM = _test_vec.shape[0]
 index = faiss.IndexFlatL2(EMBED_DIM)
 
 def load_embeddings(school):
@@ -129,19 +140,24 @@ st.title("🧠 Academic Intelligence Platform")
 with st.sidebar:
     school_id = st.text_input("School Code", "DEMO_SCHOOL")
 
-    classes = sorted(df[CLASS_COL].unique())
+    classes = sorted(df[CLASS_COL].dropna().unique())
     cls = st.selectbox("Class", classes)
 
-    subjects = sorted(df[df[CLASS_COL] == cls][SUBJECT_COL].unique())
+    subjects = sorted(
+        df[df[CLASS_COL] == cls][SUBJECT_COL].dropna().unique()
+    )
     subject = st.selectbox("Subject", subjects)
 
     if CHAPTER_COL:
         chapters = sorted(
-            df[(df[CLASS_COL] == cls) & (df[SUBJECT_COL] == subject)][CHAPTER_COL].dropna().unique()
+            df[
+                (df[CLASS_COL] == cls) &
+                (df[SUBJECT_COL] == subject)
+            ][CHAPTER_COL].dropna().unique()
         )
         chapter = st.selectbox("Chapter", chapters)
     else:
-        chapter = "N/A"
+        chapter = "General"
 
     if LO_COL:
         los = sorted(
@@ -153,7 +169,7 @@ with st.sidebar:
         )
         lo = st.selectbox("Learning Outcome", los)
     else:
-        lo = "General Concept"
+        lo = "Conceptual Understanding"
 
     generate_btn = st.button("Generate Question")
 
@@ -180,7 +196,7 @@ if generate_btn:
         """, (
             qid,
             school_id,
-            cls,
+            str(cls),
             subject,
             chapter,
             lo,
