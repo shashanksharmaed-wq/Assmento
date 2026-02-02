@@ -1,26 +1,23 @@
 import streamlit as st
 import openai
-import sqlite3
-import uuid
-import json
-import numpy as np
 import pandas as pd
-import faiss
+import numpy as np
+import sqlite3
+import json
+import uuid
 from datetime import datetime
 
 # =========================
 # CONFIG
 # =========================
 
-st.set_page_config(page_title="Academic Intelligence Platform", layout="wide")
+st.set_page_config(page_title="Assessment Intelligence (EI-style)", layout="wide")
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 LLM_MODEL = "gpt-4.1"
-EMBED_MODEL = "text-embedding-3-large"
-SIM_THRESHOLD = 0.85
 
 # =========================
-# LOAD TSV (SAFE)
+# LOAD SYLLABUS
 # =========================
 
 @st.cache_data
@@ -31,194 +28,178 @@ def load_syllabus():
 
 df = load_syllabus()
 
-# ---------- SAFE COLUMN DETECTION ----------
-
-def find_col(possible_names):
-    for col in df.columns:
-        if col.lower().replace(" ", "_") in possible_names:
-            return col
+def find_col(names):
+    for c in df.columns:
+        if c.lower().replace(" ", "_") in names:
+            return c
     return None
 
-CLASS_COL = find_col({"class", "grade", "std", "class_name", "grade_level"})
+CLASS_COL = find_col({"class", "grade", "std"})
 SUBJECT_COL = find_col({"subject"})
 CHAPTER_COL = find_col({"chapter", "unit"})
-LO_COL = find_col({"lo", "learning_outcome", "learning outcome", "objective"})
-
-if not CLASS_COL or not SUBJECT_COL:
-    st.error("Required columns (Class / Subject) not found in TSV")
-    st.stop()
+LO_COL = find_col({"lo", "learning_outcome", "learning outcome"})
 
 # =========================
 # DATABASE
 # =========================
 
-conn = sqlite3.connect("questions.db", check_same_thread=False)
+conn = sqlite3.connect("attempts.db", check_same_thread=False)
 cur = conn.cursor()
 
 cur.execute("""
-CREATE TABLE IF NOT EXISTS questions (
-    id TEXT PRIMARY KEY,
-    school_id TEXT,
-    class TEXT,
-    subject TEXT,
-    chapter TEXT,
-    lo TEXT,
+CREATE TABLE IF NOT EXISTS attempts (
+    attempt_id TEXT,
+    qno INTEGER,
     question TEXT,
-    options TEXT,
-    answer TEXT,
-    solution TEXT,
-    embedding BLOB,
+    selected TEXT,
+    correct TEXT,
+    explanation TEXT,
     created_at TEXT
 )
 """)
 conn.commit()
 
 # =========================
-# EMBEDDING + FAISS (SAFE)
-# =========================
-
-def embed(text):
-    r = openai.embeddings.create(model=EMBED_MODEL, input=text)
-    return np.array(r.data[0].embedding, dtype="float32")
-
-_test_vec = embed("init")
-EMBED_DIM = _test_vec.shape[0]
-index = faiss.IndexFlatL2(EMBED_DIM)
-
-def load_embeddings(school):
-    cur.execute("SELECT embedding FROM questions WHERE school_id=?", (school,))
-    for (e,) in cur.fetchall():
-        v = np.frombuffer(e, dtype="float32")
-        index.add(v.reshape(1, -1))
-
-def is_unique(v):
-    if index.ntotal == 0:
-        return True
-    D, _ = index.search(v.reshape(1, -1), 1)
-    return D[0][0] > SIM_THRESHOLD
-
-# =========================
-# QUESTION GENERATION
+# QUESTION GENERATOR (HARD)
 # =========================
 
 def generate_question(cls, subject, chapter, lo):
     prompt = f"""
-Create ONE CBSE MCQ.
+You are designing a DIAGNOSTIC question like EI ASSET.
 
 Class: {cls}
 Subject: {subject}
 Chapter: {chapter}
 Learning Outcome: {lo}
 
-Rules:
-- NCERT aligned
-- Conceptual
-- Exam quality
-- JSON only
+MANDATORY RULES:
+- Minimum TWO reasoning steps
+- No direct formula substitution
+- At least TWO options must be misconception-based
+- All options must look plausible
+- Difficulty should challenge top 25% students
 
-JSON:
+Return JSON ONLY:
 {{
  "question": "",
  "options": ["A","B","C","D"],
  "answer": "",
- "solution": ""
+ "explanation": "Explain why each wrong option is tempting but incorrect"
 }}
 """
     r = openai.chat.completions.create(
         model=LLM_MODEL,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.8
+        temperature=0.9
     )
     return json.loads(r.choices[0].message.content)
 
 # =========================
-# UI
+# UI – EI ASSET STYLE
 # =========================
 
-st.title("🧠 Academic Intelligence Platform")
+st.title("🧠 Diagnostic Assessment (EI-Style)")
+st.caption("Thinking • Reasoning • Misconception Detection")
 
 with st.sidebar:
-    school_id = st.text_input("School Code", "DEMO_SCHOOL")
-
-    classes = sorted(df[CLASS_COL].dropna().unique())
-    cls = st.selectbox("Class", classes)
-
-    subjects = sorted(
-        df[df[CLASS_COL] == cls][SUBJECT_COL].dropna().unique()
+    cls = st.selectbox("Class", sorted(df[CLASS_COL].unique()))
+    subject = st.selectbox(
+        "Subject",
+        sorted(df[df[CLASS_COL] == cls][SUBJECT_COL].unique())
     )
-    subject = st.selectbox("Subject", subjects)
 
-    if CHAPTER_COL:
-        chapters = sorted(
-            df[
-                (df[CLASS_COL] == cls) &
-                (df[SUBJECT_COL] == subject)
-            ][CHAPTER_COL].dropna().unique()
-        )
-        chapter = st.selectbox("Chapter", chapters)
-    else:
-        chapter = "General"
+    chapters = sorted(
+        df[(df[CLASS_COL] == cls) & (df[SUBJECT_COL] == subject)][CHAPTER_COL].unique()
+    )
+    chapter = st.selectbox("Chapter", chapters)
 
-    if LO_COL:
-        los = sorted(
-            df[
-                (df[CLASS_COL] == cls) &
-                (df[SUBJECT_COL] == subject) &
-                ((df[CHAPTER_COL] == chapter) if CHAPTER_COL else True)
-            ][LO_COL].dropna().unique()
-        )
-        lo = st.selectbox("Learning Outcome", los)
-    else:
-        lo = "Conceptual Understanding"
+    los = sorted(
+        df[
+            (df[CLASS_COL] == cls) &
+            (df[SUBJECT_COL] == subject) &
+            (df[CHAPTER_COL] == chapter)
+        ][LO_COL].unique()
+    )
+    lo = st.selectbox("Learning Outcome", los)
 
-    generate_btn = st.button("Generate Question")
-
-if "loaded" not in st.session_state:
-    load_embeddings(school_id)
-    st.session_state.loaded = True
+    num_q = st.slider("Number of Questions", 5, 15, 8)
+    start = st.button("Start Assessment")
 
 # =========================
-# PIPELINE
+# GENERATE FULL TEST
 # =========================
 
-if generate_btn:
-    q = generate_question(cls, subject, chapter, lo)
-    vec = embed(q["question"] + q["solution"])
+if start:
+    st.session_state.attempt_id = str(uuid.uuid4())
+    st.session_state.questions = []
+    st.session_state.responses = {}
 
-    if not is_unique(vec):
-        st.error("Similar question exists. Try again.")
-    else:
-        qid = str(uuid.uuid4())
-        index.add(vec.reshape(1, -1))
+    for _ in range(num_q):
+        q = generate_question(cls, subject, chapter, lo)
+        st.session_state.questions.append(q)
 
-        cur.execute("""
-        INSERT INTO questions VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-            qid,
-            school_id,
-            str(cls),
-            subject,
-            chapter,
-            lo,
-            q["question"],
-            json.dumps(q["options"]),
-            q["answer"],
-            q["solution"],
-            vec.tobytes(),
-            datetime.now().isoformat()
-        ))
-        conn.commit()
+# =========================
+# ASSESSMENT VIEW
+# =========================
 
-        st.success("Question Generated")
+if "questions" in st.session_state:
 
-        st.subheader("Question")
-        st.write(q["question"])
+    st.markdown("### Answer ALL questions. Results appear only after submission.")
 
-        for o in q["options"]:
-            st.write(o)
+    for i, q in enumerate(st.session_state.questions):
+        st.markdown(f"**Q{i+1}. {q['question']}**")
+        choice = st.radio(
+            "",
+            q["options"],
+            key=f"q_{i}",
+            index=None
+        )
+        st.session_state.responses[i] = choice
+        st.markdown("---")
 
-        st.subheader("Answer")
-        st.write(q["answer"])
+    submit = st.button("Submit Assessment")
 
-        st.subheader("Solution")
-        st.write(q["solution"])
+    # =========================
+    # RESULTS (POST-SUBMIT)
+    # =========================
+
+    if submit:
+        score = 0
+
+        st.markdown("## 📊 Diagnostic Report")
+
+        for i, q in enumerate(st.session_state.questions):
+            selected = st.session_state.responses.get(i)
+            correct = q["answer"]
+
+            if selected == correct:
+                score += 1
+
+            cur.execute("""
+            INSERT INTO attempts VALUES (?,?,?,?,?,?)
+            """, (
+                st.session_state.attempt_id,
+                i + 1,
+                q["question"],
+                selected,
+                correct,
+                q["explanation"],
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+
+            st.markdown(f"### Q{i+1}")
+            st.write(q["question"])
+            st.write(f"**Your Answer:** {selected}")
+            st.write(f"**Correct Answer:** {correct}")
+            st.write(f"**Explanation:** {q['explanation']}")
+            st.markdown("---")
+
+        st.markdown(f"## ✅ Score: {score} / {len(st.session_state.questions)}")
+
+        st.markdown("""
+        **Interpretation (EI-style):**
+        - High score → Strong conceptual clarity
+        - Medium score → Partial misconceptions
+        - Low score → Foundational gaps detected
+        """)
