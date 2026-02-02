@@ -20,7 +20,7 @@ openai.api_key = st.secrets["OPENAI_API_KEY"]
 LLM_MODEL = "gpt-4.1"
 
 # =========================
-# LOAD SYLLABUS (SAFE)
+# LOAD TSV (NO ASSUMPTIONS)
 # =========================
 
 @st.cache_data
@@ -31,21 +31,30 @@ def load_syllabus():
 
 df = load_syllabus()
 
-# --- auto-detect columns once ---
-def find_col(possible):
-    for c in df.columns:
-        key = c.lower().replace(" ", "_")
-        if key in possible:
-            return c
-    return None
+# -------------------------
+# MINIMUM REQUIRED COLUMNS
+# -------------------------
 
-CLASS_COL   = find_col({"class", "grade", "std"})
-SUBJECT_COL = find_col({"subject", "subject_name", "sub"})
-CHAPTER_COL = find_col({"chapter", "unit", "lesson"})
-LO_COL      = find_col({"lo", "learning_outcome", "learning outcome"})
+# pick first column that looks like class/grade
+CLASS_COL = next(
+    (c for c in df.columns if "class" in c.lower() or "grade" in c.lower() or "std" in c.lower()),
+    None
+)
 
-if not CLASS_COL or not SUBJECT_COL or not CHAPTER_COL:
-    st.error("Required syllabus columns (Class / Subject / Chapter) not found.")
+# pick first column that looks like subject
+SUBJECT_COL = next(
+    (c for c in df.columns if "subject" in c.lower()),
+    None
+)
+
+# pick ANY remaining column as topic (optional)
+TOPIC_COL = next(
+    (c for c in df.columns if c not in [CLASS_COL, SUBJECT_COL]),
+    None
+)
+
+if not CLASS_COL or not SUBJECT_COL:
+    st.error("Your syllabus file must have at least Class/Grade and Subject columns.")
     st.stop()
 
 # =========================
@@ -80,9 +89,9 @@ Context:
 {context}
 
 MANDATORY RULES:
-- At least TWO reasoning steps
+- Minimum TWO reasoning steps
 - No direct formula substitution
-- Minimum TWO misconception-based distractors
+- At least TWO misconception-based distractors
 - All options must look plausible
 
 Return JSON ONLY:
@@ -105,7 +114,7 @@ Return JSON ONLY:
 # =========================
 
 st.title("🧠 Diagnostic Assessment")
-st.caption("EI-Style • Thinking • Reasoning • Misconceptions")
+st.caption("EI-Style • Reasoning • Misconceptions")
 
 with st.sidebar:
     st.markdown("### 📘 Assessment Setup")
@@ -115,32 +124,20 @@ with st.sidebar:
     grade = st.selectbox("Grade", grades)
 
     # 2️⃣ SUBJECT
-    subjects = sorted(
-        df[df[CLASS_COL] == grade][SUBJECT_COL].dropna().unique()
-    )
+    subjects = sorted(df[df[CLASS_COL] == grade][SUBJECT_COL].dropna().unique())
     subject = st.selectbox("Subject", subjects)
 
-    # 3️⃣ CHAPTER
-    chapters = sorted(
-        df[
-            (df[CLASS_COL] == grade) &
-            (df[SUBJECT_COL] == subject)
-        ][CHAPTER_COL].dropna().unique()
-    )
-    chapter = st.selectbox("Chapter", chapters)
-
-    # 4️⃣ LEARNING OUTCOME (OPTIONAL)
-    if LO_COL:
-        los = sorted(
+    # 3️⃣ TOPIC (IF EXISTS)
+    if TOPIC_COL:
+        topics = sorted(
             df[
                 (df[CLASS_COL] == grade) &
-                (df[SUBJECT_COL] == subject) &
-                (df[CHAPTER_COL] == chapter)
-            ][LO_COL].dropna().unique()
+                (df[SUBJECT_COL] == subject)
+            ][TOPIC_COL].dropna().unique()
         )
-        lo = st.selectbox("Learning Outcome", ["All"] + los)
+        topic = st.selectbox("Topic", topics)
     else:
-        lo = "Conceptual Understanding"
+        topic = "General Concept"
 
     st.markdown("---")
     num_q = st.slider("Number of Questions", 5, 15, 8)
@@ -158,8 +155,7 @@ if start:
     context = f"""
 Grade: {grade}
 Subject: {subject}
-Chapter: {chapter}
-Learning Outcome: {lo}
+Topic: {topic}
 """
 
     for _ in range(num_q):
@@ -185,10 +181,6 @@ if "questions" in st.session_state:
         st.markdown("---")
 
     submit = st.button("Submit Assessment")
-
-    # =========================
-    # RESULTS
-    # =========================
 
     if submit:
         score = 0
@@ -222,9 +214,3 @@ if "questions" in st.session_state:
             st.markdown("---")
 
         st.markdown(f"## ✅ Score: {score} / {len(st.session_state.questions)}")
-        st.markdown("""
-**Interpretation (EI-Style)**  
-• High score → Strong conceptual clarity  
-• Medium score → Partial misconceptions  
-• Low score → Foundational gaps detected  
-""")
