@@ -4,6 +4,7 @@ import pandas as pd
 import sqlite3
 import json
 import uuid
+import re
 from datetime import datetime
 
 # =========================
@@ -20,7 +21,7 @@ openai.api_key = st.secrets["OPENAI_API_KEY"]
 LLM_MODEL = "gpt-4.1"
 
 # =========================
-# LOAD TSV (NO ASSUMPTIONS)
+# LOAD TSV (MINIMUM ASSUMPTION)
 # =========================
 
 @st.cache_data
@@ -31,30 +32,12 @@ def load_syllabus():
 
 df = load_syllabus()
 
-# -------------------------
-# MINIMUM REQUIRED COLUMNS
-# -------------------------
-
-# pick first column that looks like class/grade
-CLASS_COL = next(
-    (c for c in df.columns if "class" in c.lower() or "grade" in c.lower() or "std" in c.lower()),
-    None
-)
-
-# pick first column that looks like subject
-SUBJECT_COL = next(
-    (c for c in df.columns if "subject" in c.lower()),
-    None
-)
-
-# pick ANY remaining column as topic (optional)
-TOPIC_COL = next(
-    (c for c in df.columns if c not in [CLASS_COL, SUBJECT_COL]),
-    None
-)
+CLASS_COL = next((c for c in df.columns if "class" in c.lower() or "grade" in c.lower()), None)
+SUBJECT_COL = next((c for c in df.columns if "subject" in c.lower()), None)
+TOPIC_COL = next((c for c in df.columns if c not in [CLASS_COL, SUBJECT_COL]), None)
 
 if not CLASS_COL or not SUBJECT_COL:
-    st.error("Your syllabus file must have at least Class/Grade and Subject columns.")
+    st.error("Syllabus file must contain Class/Grade and Subject columns.")
     st.stop()
 
 # =========================
@@ -78,17 +61,30 @@ CREATE TABLE IF NOT EXISTS attempts (
 conn.commit()
 
 # =========================
-# HARD QUESTION GENERATOR
+# SAFE JSON EXTRACTION
 # =========================
 
-def generate_question(context):
+def extract_json(text):
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group())
+    except:
+        return None
+
+# =========================
+# HARD QUESTION GENERATOR (FAIL-SAFE)
+# =========================
+
+def generate_question(context, retries=3):
     prompt = f"""
 Create ONE HARD diagnostic MCQ like EI ASSET.
 
 Context:
 {context}
 
-MANDATORY RULES:
+MANDATORY:
 - Minimum TWO reasoning steps
 - No direct formula substitution
 - At least TWO misconception-based distractors
@@ -102,12 +98,24 @@ Return JSON ONLY:
  "explanation": "Explain why each wrong option is tempting but incorrect"
 }}
 """
-    r = openai.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.9
-    )
-    return json.loads(r.choices[0].message.content)
+    for _ in range(retries):
+        r = openai.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.9
+        )
+        content = r.choices[0].message.content
+        data = extract_json(content)
+        if data and "question" in data:
+            return data
+
+    # absolute fallback (never crash)
+    return {
+        "question": "Diagnostic question generation failed. Please retry.",
+        "options": ["A", "B", "C", "D"],
+        "answer": "A",
+        "explanation": "System fallback."
+    }
 
 # =========================
 # UI – CLEAN EI-STYLE INDEX
@@ -119,27 +127,21 @@ st.caption("EI-Style • Reasoning • Misconceptions")
 with st.sidebar:
     st.markdown("### 📘 Assessment Setup")
 
-    # 1️⃣ GRADE
     grades = sorted(df[CLASS_COL].dropna().unique())
     grade = st.selectbox("Grade", grades)
 
-    # 2️⃣ SUBJECT
     subjects = sorted(df[df[CLASS_COL] == grade][SUBJECT_COL].dropna().unique())
     subject = st.selectbox("Subject", subjects)
 
-    # 3️⃣ TOPIC (IF EXISTS)
     if TOPIC_COL:
         topics = sorted(
-            df[
-                (df[CLASS_COL] == grade) &
-                (df[SUBJECT_COL] == subject)
-            ][TOPIC_COL].dropna().unique()
+            df[(df[CLASS_COL] == grade) & (df[SUBJECT_COL] == subject)][TOPIC_COL]
+            .dropna().unique()
         )
         topic = st.selectbox("Topic", topics)
     else:
         topic = "General Concept"
 
-    st.markdown("---")
     num_q = st.slider("Number of Questions", 5, 15, 8)
     start = st.button("▶ Start Assessment")
 
