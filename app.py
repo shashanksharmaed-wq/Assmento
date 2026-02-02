@@ -10,21 +10,43 @@ from datetime import datetime
 # CONFIG
 # =========================
 
-st.set_page_config(page_title="EI-Style Diagnostic Assessment", layout="wide")
+st.set_page_config(
+    page_title="Diagnostic Assessment (EI-Style)",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 LLM_MODEL = "gpt-4.1"
 
 # =========================
-# LOAD TSV (NO ASSUMPTIONS)
+# LOAD SYLLABUS (SAFE)
 # =========================
 
 @st.cache_data
-def load_tsv():
+def load_syllabus():
     df = pd.read_csv("Teachshank_Master_Database_FINAL.tsv", sep="\t")
     df.columns = [c.strip() for c in df.columns]
     return df
 
-df = load_tsv()
+df = load_syllabus()
+
+# --- auto-detect columns once ---
+def find_col(possible):
+    for c in df.columns:
+        key = c.lower().replace(" ", "_")
+        if key in possible:
+            return c
+    return None
+
+CLASS_COL   = find_col({"class", "grade", "std"})
+SUBJECT_COL = find_col({"subject", "subject_name", "sub"})
+CHAPTER_COL = find_col({"chapter", "unit", "lesson"})
+LO_COL      = find_col({"lo", "learning_outcome", "learning outcome"})
+
+if not CLASS_COL or not SUBJECT_COL or not CHAPTER_COL:
+    st.error("Required syllabus columns (Class / Subject / Chapter) not found.")
+    st.stop()
 
 # =========================
 # DATABASE
@@ -47,7 +69,7 @@ CREATE TABLE IF NOT EXISTS attempts (
 conn.commit()
 
 # =========================
-# QUESTION GENERATOR (EI HARD)
+# HARD QUESTION GENERATOR
 # =========================
 
 def generate_question(context):
@@ -57,10 +79,10 @@ Create ONE HARD diagnostic MCQ like EI ASSET.
 Context:
 {context}
 
-MANDATORY:
-- Minimum 2 reasoning steps
+MANDATORY RULES:
+- At least TWO reasoning steps
 - No direct formula substitution
-- At least 2 misconception-based distractors
+- Minimum TWO misconception-based distractors
 - All options must look plausible
 
 Return JSON ONLY:
@@ -68,7 +90,7 @@ Return JSON ONLY:
  "question": "",
  "options": ["A","B","C","D"],
  "answer": "",
- "explanation": "Explain why each wrong option is tempting"
+ "explanation": "Explain why each wrong option is tempting but incorrect"
 }}
 """
     r = openai.chat.completions.create(
@@ -79,52 +101,53 @@ Return JSON ONLY:
     return json.loads(r.choices[0].message.content)
 
 # =========================
-# UI – COLUMN MAPPING (FAIL-SAFE)
+# UI – CLEAN EI-STYLE INDEX
 # =========================
 
-st.title("🧠 Diagnostic Assessment (EI-Style)")
-st.caption("Thinking • Reasoning • Misconception Detection")
-
-st.markdown("### Syllabus Mapping (auto-safe)")
-
-with st.expander("📄 TSV Columns Detected"):
-    st.write(list(df.columns))
+st.title("🧠 Diagnostic Assessment")
+st.caption("EI-Style • Thinking • Reasoning • Misconceptions")
 
 with st.sidebar:
-    class_col = st.selectbox("Select Class Column", df.columns)
-    subject_col = st.selectbox("Select Subject Column", df.columns)
-    chapter_col = st.selectbox("Select Chapter Column", df.columns)
-    lo_col = st.selectbox("Select LO Column (optional)", ["None"] + list(df.columns))
+    st.markdown("### 📘 Assessment Setup")
 
-    classes = sorted(df[class_col].dropna().unique())
-    cls = st.selectbox("Class", classes)
+    # 1️⃣ GRADE
+    grades = sorted(df[CLASS_COL].dropna().unique())
+    grade = st.selectbox("Grade", grades)
 
-    subjects = sorted(df[df[class_col] == cls][subject_col].dropna().unique())
+    # 2️⃣ SUBJECT
+    subjects = sorted(
+        df[df[CLASS_COL] == grade][SUBJECT_COL].dropna().unique()
+    )
     subject = st.selectbox("Subject", subjects)
 
+    # 3️⃣ CHAPTER
     chapters = sorted(
-        df[(df[class_col] == cls) & (df[subject_col] == subject)][chapter_col]
-        .dropna().unique()
+        df[
+            (df[CLASS_COL] == grade) &
+            (df[SUBJECT_COL] == subject)
+        ][CHAPTER_COL].dropna().unique()
     )
     chapter = st.selectbox("Chapter", chapters)
 
-    if lo_col != "None":
+    # 4️⃣ LEARNING OUTCOME (OPTIONAL)
+    if LO_COL:
         los = sorted(
             df[
-                (df[class_col] == cls) &
-                (df[subject_col] == subject) &
-                (df[chapter_col] == chapter)
-            ][lo_col].dropna().unique()
+                (df[CLASS_COL] == grade) &
+                (df[SUBJECT_COL] == subject) &
+                (df[CHAPTER_COL] == chapter)
+            ][LO_COL].dropna().unique()
         )
-        lo = st.selectbox("Learning Outcome", los)
+        lo = st.selectbox("Learning Outcome", ["All"] + los)
     else:
-        lo = "Conceptual Reasoning"
+        lo = "Conceptual Understanding"
 
+    st.markdown("---")
     num_q = st.slider("Number of Questions", 5, 15, 8)
-    start = st.button("Start Assessment")
+    start = st.button("▶ Start Assessment")
 
 # =========================
-# GENERATE TEST
+# GENERATE ASSESSMENT
 # =========================
 
 if start:
@@ -133,36 +156,39 @@ if start:
     st.session_state.attempt_id = str(uuid.uuid4())
 
     context = f"""
-Class: {cls}
+Grade: {grade}
 Subject: {subject}
 Chapter: {chapter}
 Learning Outcome: {lo}
 """
 
     for _ in range(num_q):
-        q = generate_question(context)
-        st.session_state.questions.append(q)
+        st.session_state.questions.append(
+            generate_question(context)
+        )
 
 # =========================
-# ASSESSMENT VIEW (EI STYLE)
+# ASSESSMENT VIEW
 # =========================
 
 if "questions" in st.session_state:
-
-    st.markdown("### Answer all questions. Answers shown only after submission.")
+    st.markdown("### Answer all questions. Answers appear only after submission.")
 
     for i, q in enumerate(st.session_state.questions):
         st.markdown(f"**Q{i+1}. {q['question']}**")
-        choice = st.radio(
+        st.session_state.responses[i] = st.radio(
             "",
             q["options"],
             key=f"q_{i}",
             index=None
         )
-        st.session_state.responses[i] = choice
         st.markdown("---")
 
     submit = st.button("Submit Assessment")
+
+    # =========================
+    # RESULTS
+    # =========================
 
     if submit:
         score = 0
@@ -190,15 +216,15 @@ if "questions" in st.session_state:
 
             st.markdown(f"### Q{i+1}")
             st.write(q["question"])
-            st.write(f"Your Answer: {selected}")
-            st.write(f"Correct Answer: {correct}")
-            st.write(f"Explanation: {q['explanation']}")
+            st.write(f"**Your Answer:** {selected}")
+            st.write(f"**Correct Answer:** {correct}")
+            st.write(f"**Explanation:** {q['explanation']}")
             st.markdown("---")
 
         st.markdown(f"## ✅ Score: {score} / {len(st.session_state.questions)}")
         st.markdown("""
-**EI-style interpretation**
-- High score → Strong conceptual clarity
-- Medium score → Partial misconceptions
-- Low score → Foundational gaps detected
+**Interpretation (EI-Style)**  
+• High score → Strong conceptual clarity  
+• Medium score → Partial misconceptions  
+• Low score → Foundational gaps detected  
 """)
