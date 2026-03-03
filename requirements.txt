@@ -3,4 +3,5 @@ pandas
 openai
 fpdf2
 python-docx
+plotly
 openpyxl
