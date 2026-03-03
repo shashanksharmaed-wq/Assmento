@@ -5,6 +5,7 @@ import json
 from fpdf import FPDF
 from docx import Document
 import io
+import re
 
 # 1. INITIALIZATION
 st.set_page_config(page_title="EduDiagnostic Pro 2026", layout="wide", page_icon="📝")
@@ -15,54 +16,53 @@ if "OPENAI_API_KEY" not in st.secrets:
 
 client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# 2. THE BEAUTY LAYER: FORMATTER
-def format_exam_paper(json_data):
-    """Converts raw JSON into a professional, clean printed paper."""
+# 2. THE "NO-BRACKETS" CLEANING ENGINE
+def scrub_to_human_text(json_input):
+    """Specifically removes all JSON/HTML artifacts and builds a clean paper."""
     try:
-        data = json_data if isinstance(json_data, dict) else json.loads(json_data)
+        # If input is string, convert to dict
+        data = json.loads(json_input) if isinstance(json_input, str) else json_input
         
-        # Header for the student paper
-        paper = "STUDENT ASSESSMENT: " + st.session_state.get('last_lo', 'General') + "\n"
-        paper += "NAME: __________________________    DATE: __________\n"
-        paper += "="*60 + "\n\n"
+        # Build the Human-Readable String
+        clean_paper = f"ASSESSMENT: {st.session_state.get('last_lo', 'General Topic')}\n"
+        clean_paper += "STUDENT NAME: __________________________    DATE: __________\n"
+        clean_paper += "="*60 + "\n\n"
         
-        # Answer Key section (stored separately)
-        key = "\n" + "="*20 + " TEACHER ANSWER KEY " + "="*20 + "\n"
-        
-        for i, q in enumerate(data.get('questions', []), 1):
-            # Format Question
-            paper += f"Question {i} ({q.get('level', 'Foundation')}):\n"
-            paper += f"{q['question']}\n\n"
+        questions = data.get('questions', [])
+        for i, q in enumerate(questions, 1):
+            clean_paper += f"QUESTION {i} [{q.get('level', 'Foundation')}]:\n"
+            clean_paper += f"{q.get('question', 'No question text provided.')}\n\n"
             
-            # Format Options
-            options = q.get('options', [])
-            for idx, opt in enumerate(options):
-                letter = chr(65 + idx) # A, B, C, D
-                paper += f"   [{letter}] {opt}\n"
+            opts = q.get('options', [])
+            for idx, opt in enumerate(opts):
+                clean_paper += f"   {chr(65+idx)}) {opt}\n"
             
-            paper += "\n" + "-"*40 + "\n\n"
+            clean_paper += "\n" + "."*40 + "\n\n"
             
-            # Build Answer Key
+        # Add Answer Key at the very end
+        clean_paper += "\n\n" + "="*20 + " TEACHER'S ANSWER KEY " + "="*20 + "\n"
+        for i, q in enumerate(questions, 1):
             correct_idx = q.get('correct', 0)
-            correct_letter = chr(65 + correct_idx)
-            key += f"Q{i}: {correct_letter} | Misconception: {q.get('misconception_map', {}).get(str(correct_idx), 'N/A')}\n"
+            clean_paper += f"Q{i}: {chr(65+correct_idx)} | Concept: {q.get('level')}\n"
             
-        return paper, key
+        return clean_paper
     except Exception as e:
-        return f"Formatting Error: {str(e)}", ""
+        # Fallback: if JSON fails, manually strip brackets using Regex
+        text = str(json_input)
+        text = re.sub(r'[{} ["[\]]', '', text) # Remove brackets/braces
+        return f"Formatting Error, but here is the cleaned text:\n\n{text}"
 
-# 3. DOWNLOAD UTILITIES (PDF & WORD)
+# 3. FILE GENERATORS
 def get_pdf_bytes(text):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("helvetica", size=11)
-    # Using multi_cell ensures text wraps and respects newlines
-    pdf.multi_cell(0, 8, txt=text)
+    pdf.multi_cell(0, 7, txt=text)
     return bytes(pdf.output())
 
 def get_docx_bytes(text):
     doc = Document()
-    doc.add_heading('Assessment Paper', 0)
+    doc.add_heading('Classroom Assessment', 0)
     doc.add_paragraph(text)
     bio = io.BytesIO()
     doc.save(bio)
@@ -70,46 +70,38 @@ def get_docx_bytes(text):
 
 # 4. AGENT LOGIC
 def agent_creator(lo, count):
-    prompt = f"Create a {count}-question diagnostic for LO: {lo}. Output ONLY JSON: 'questions': [{{id, level, question, options:[], correct, misconception_map:{{}} }}]"
+    # Strict prompt to ensure JSON is returned for our cleaner to process
+    prompt = f"Create a {count}-question diagnostic for LO: {lo}. Return ONLY a JSON object with a 'questions' list."
     response = client.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": "system", "content": "You are an Expert Exam Architect. Output clean JSON only."},
+        messages=[{"role": "system", "content": "You are a professional exam formatter. Output valid JSON."},
                   {"role": "user", "content": prompt}],
         response_format={"type": "json_object"}
     )
     return json.loads(response.choices[0].message.content)
 
-# 5. USER INTERFACE
-st.title("🎓 Professional Exam Generator & EI Engine")
-st.info("Generates clean, printable assessments without brackets or code.")
+# 5. UI
+st.title("🎓 Professional Diagnostic Engine")
+st.markdown("### Step 1: Generate a Clean Paper")
 
 with st.sidebar:
-    st.header("Test Settings")
-    lo = st.text_input("Learning Outcome", placeholder="e.g. Parts of a Plant")
+    lo = st.text_input("Learning Outcome", "Human Digestive System")
     q_count = st.slider("Number of Questions", 5, 15, 5)
     st.session_state.last_lo = lo
 
-if st.button("🚀 Generate Professional Assessment"):
-    with st.spinner("Removing code brackets and formatting layout..."):
-        raw_json = agent_creator(lo, q_count)
-        student_paper, teacher_key = format_exam_paper(raw_json)
-        
-        # Store both in session state
-        st.session_state.full_doc = student_paper + "\n\n" + teacher_key
-        st.session_state.preview = student_paper
-        st.success("Assessment Ready!")
+if st.button("🚀 Generate Print-Ready Assessment"):
+    with st.spinner("Removing brackets and building layout..."):
+        raw_data = agent_creator(lo, q_count)
+        # FORCE THE CLEANING
+        st.session_state.clean_output = scrub_to_human_text(raw_data)
+        st.success("Clean Assessment Created!")
 
-if 'preview' in st.session_state:
-    st.subheader("👀 Print Preview")
-    st.text_area("Final Output", st.session_state.preview, height=400)
+if 'clean_output' in st.session_state:
+    st.subheader("📝 Live Preview (Brackets Removed)")
+    st.text_area("Final Version", st.session_state.clean_output, height=400)
     
-    st.divider()
-    c1, c2 = st.columns(2)
-    with c1:
-        st.download_button("📥 Download PDF", 
-                          data=get_pdf_bytes(st.session_state.full_doc), 
-                          file_name="Assessment.pdf", mime="application/pdf")
-    with c2:
-        st.download_button("📥 Download Word (.docx)", 
-                          data=get_docx_bytes(st.session_state.full_doc), 
-                          file_name="Assessment.docx")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button("📥 Download PDF", data=get_pdf_bytes(st.session_state.clean_output), file_name="Test.pdf")
+    with col2:
+        st.download_button("📥 Download Word", data=get_docx_bytes(st.session_state.clean_output), file_name="Test.docx")
