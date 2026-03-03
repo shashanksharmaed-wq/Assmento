@@ -3,60 +3,60 @@ import pandas as pd
 import openai
 import json
 from fpdf import FPDF
-from docx import Document
+import plotly.express as px
 import io
 
-# 1. SETUP & AUTHENTICATION
-st.set_page_config(page_title="EduDiagnostic Elite 2026", layout="wide", page_icon="🎓")
+# 1. SETUP & BRANDING
+st.set_page_config(page_title="Assemento Elite 2026", layout="wide", page_icon="🎯")
 
 if "OPENAI_API_KEY" not in st.secrets:
-    st.error("Missing API Key in Secrets! Add 'OPENAI_API_KEY' to your Streamlit settings.")
+    st.error("Missing API Key! Please add 'OPENAI_API_KEY' to Streamlit Secrets.")
     st.stop()
 
 client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# 2. BRANDED PDF ENGINE (Logo Placeholder)
-class ElitePDF(FPDF):
+# 2. BRANDED PDF ENGINE
+class AssementoPDF(FPDF):
     def header(self):
-        # Professional Header with Logo Space
-        self.set_font('helvetica', 'B', 8)
-        self.cell(45, 12, ' [ PLACE LOGO HERE ] ', 1, 0, 'C')
-        self.set_font('helvetica', 'B', 15)
-        self.set_text_color(40, 70, 120)
-        self.cell(0, 10, 'NEURO-DIAGNOSTIC ASSESSMENT', 0, 1, 'R')
+        self.set_fill_color(40, 70, 120)
+        self.rect(0, 0, 210, 20, 'F')
+        self.set_text_color(255, 255, 255)
+        self.set_font('helvetica', 'B', 14)
+        self.cell(0, 10, 'ASSEMENTO DIAGNOSTIC INTELLIGENCE', 0, 1, 'C')
         self.ln(10)
 
 def get_pdf_bytes(text):
-    pdf = ElitePDF()
+    pdf = AssementoPDF()
     pdf.add_page()
     pdf.set_font("helvetica", size=11)
-    # Handle encoding for PDF generation
     safe_text = text.encode('latin-1', 'replace').decode('latin-1')
     pdf.multi_cell(0, 8, txt=safe_text)
     return bytes(pdf.output())
 
-# 3. AGENT DEFINITIONS
-def agent_architect(lo, count, tiers):
+# 3. ASSEMENTO AGENTS
+def agent_assessment_creator(lo, count, tiers):
+    """Agent 1: Assemento Assessment Creator"""
     prompt = f"Create a {count}-question diagnostic for LO: {lo}. Tiers: {tiers}. Output ONLY JSON: 'questions': [{{id, level, question, options:[], correct, misconception_map:{{index:reason}} }}]"
     response = client.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": "system", "content": "You are a Senior Psychometrician. Output clean JSON only."},
+        messages=[{"role": "system", "content": "You are the Assemento Assessment Creator. Output clean JSON only."},
                   {"role": "user", "content": prompt}],
         response_format={"type": "json_object"}
     )
     return json.loads(response.choices[0].message.content)
 
-def agent_neuro_analyst(lo, student_data):
+def agent_diagnostic_engine(lo, student_data):
+    """Agent 2: Assemento Diagnostic Engine"""
     data_json = student_data.to_json(orient='records')
-    prompt = f"Perform a Deep Neuro-Diagnostic for LO: {lo}. PART 1: CLASS-WIDE REMEDIAL. PART 2: INDIVIDUAL PROFILES. Data: {data_json}"
+    prompt = f"Perform a Deep Neuro-Diagnostic for LO: {lo}. Identify Class-wide Thinking Traps and Individual Remediation. Data: {data_json}"
     response = client.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": "system", "content": "You are a Diagnostic Data Scientist."},
+        messages=[{"role": "system", "content": "You are the Assemento Diagnostic Engine."},
                   {"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content
 
-# 4. FORMATTING LAYER (The Beauty Layer)
+# 4. FORMATTING LAYER
 def format_for_humans(json_data, lo_title):
     try:
         data = json_data if isinstance(json_data, dict) else json.loads(json_data)
@@ -70,53 +70,57 @@ def format_for_humans(json_data, lo_title):
             output += "\n" + "."*40 + "\n\n"
         return output
     except:
-        return "Error in formatting. Please retry generation."
+        return "Error in formatting. Please retry."
 
-# 5. USER INTERFACE (Unified Tabs)
-st.title("🎓 EduDiagnostic Elite Multi-Agent System")
-tab1, tab2 = st.tabs(["🏗️ Step 1: Create Assessment", "📊 Step 2: Deep Analysis"])
+# 5. USER INTERFACE (TABS)
+st.title("🎯 Assemento Elite: Multi-Agent Intelligence")
+tab1, tab2 = st.tabs(["🏗️ Assemento Assessment Creator", "📊 Assemento Diagnostic Engine"])
 
-# --- TAB 1: CREATE ASSESSMENT ---
+# --- TAB 1: CREATOR ---
 with tab1:
-    st.subheader("Architect Your Professional Paper")
-    colA, colB = st.columns(2)
-    lo_input = colA.text_input("Learning Outcome", "Newton's Laws of Motion", key="lo_gen")
-    q_num = colB.slider("Number of Questions", 5, 15, 7)
-    tiers = st.multiselect("Select Difficulty Levels", 
-                           ["Foundation", "Understanding", "Analytical", "Mastery"], 
-                           ["Foundation", "Analytical"])
+    st.subheader("Design Your Branded Paper")
+    col1, col2 = st.columns(2)
+    lo_input = col1.text_input("Learning Outcome", "Energy Conservation", key="lo_cre")
+    q_num = col2.slider("Test Length", 5, 15, 8)
+    tiers = st.multiselect("Difficulty Levels", ["Foundation", "Understanding", "Analytical", "Mastery"], ["Foundation"])
 
-    # THE TRIGGER BUTTON (RESTORED)
-    if st.button("🚀 Agent 1: Generate Branded Paper"):
-        with st.spinner("AI Agent is crafting questions..."):
-            raw_json = agent_architect(lo_input, q_num, tiers)
+    if st.button("🚀 Run Assessment Creator"):
+        with st.spinner("Assemento is architecting questions..."):
+            raw_json = agent_assessment_creator(lo_input, q_num, tiers)
             st.session_state.clean_paper = format_for_humans(raw_json, lo_input)
             st.success("Paper Generated Successfully!")
 
     if 'clean_paper' in st.session_state:
-        st.markdown("### 📝 Paper Preview")
-        st.text_area("", st.session_state.clean_paper, height=300)
-        
-        c1, c2 = st.columns(2)
-        with c1:
-            st.download_button("📥 Download Branded PDF", data=get_pdf_bytes(st.session_state.clean_paper), file_name="Test.pdf")
-        with c2:
-            st.info("💡 PDF includes designated space for your School Logo.")
+        st.text_area("Final Paper Preview", st.session_state.clean_paper, height=300)
+        st.download_button("📥 Download Branded PDF", data=get_pdf_bytes(st.session_state.clean_paper), file_name="Assemento_Test.pdf")
 
-# --- TAB 2: DEEP ANALYSIS ---
+# --- TAB 2: DIAGNOSTIC ENGINE ---
 with tab2:
-    st.subheader("Deep Misconception Mapping")
+    st.subheader("Visual Misconception Mapping")
     uploaded = st.file_uploader("Upload Student Marks (Excel)", type=["xlsx"])
     
     if uploaded:
         df = pd.read_excel(uploaded)
-        if st.button("🧠 Agent 2: Run Analysis"):
-            with st.spinner("Diagnosing misconception patterns..."):
-                full_report = agent_neuro_analyst(lo_input, df)
+        
+        # --- GRAPHICAL REPORTS ---
+        st.write("### 📈 Visual Overview")
+        g_col1, g_col2 = st.columns(2)
+        
+        # Graph 1: Score Distribution (Bar Chart)
+        if 'Score' in df.columns:
+            fig1 = px.histogram(df, x="Score", nbins=10, title="Class Score Distribution", color_discrete_sequence=['#284678'])
+            g_col1.plotly_chart(fig1, use_container_width=True)
+            
+            # Graph 2: Performance Levels (Pie Chart)
+            performance_counts = df['Score'].apply(lambda x: 'High' if x > 80 else ('Medium' if x > 50 else 'Low')).value_counts()
+            fig2 = px.pie(names=performance_counts.index, values=performance_counts.values, title="Proficiency Breakdown", hole=0.4)
+            g_col2.plotly_chart(fig2, use_container_width=True)
+
+        if st.button("🧠 Run Diagnostic Engine"):
+            with st.spinner("Assemento is identifying neural logic patterns..."):
+                full_report = agent_diagnostic_engine(lo_input, df)
                 st.session_state.final_report = full_report
                 st.markdown(full_report)
 
     if 'final_report' in st.session_state:
-        st.download_button("📥 Download Multi-Colored Analysis (PDF)", 
-                          data=get_pdf_bytes(st.session_state.final_report), 
-                          file_name="Diagnostic_Report.pdf")
+        st.download_button("📥 Download Full Analysis (PDF)", data=get_pdf_bytes(st.session_state.final_report), file_name="Assemento_Report.pdf")
