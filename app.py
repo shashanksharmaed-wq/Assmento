@@ -7,66 +7,62 @@ import plotly.express as px
 import io
 import time
 
-# --- 1. BRANDING & STYLE ---
+# --- 1. BRANDING & LOGIN (T1 to T50) ---
 st.set_page_config(page_title="Assemento Elite 2026", layout="wide", page_icon="🎯")
+USER_DB = {f"T{i}": f"T{1233+i}" for i in range(1, 51)}
 
-if "OPENAI_API_KEY" not in st.secrets:
-    st.error("Missing API Key! Please add 'OPENAI_API_KEY' to Streamlit Secrets.")
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    st.title("🎯 Assemento Elite: Private Beta")
+    with st.form("login_form"):
+        u_id = st.text_input("Teacher ID (T1-T50)")
+        p_wd = st.text_input("Password", type="password")
+        if st.form_submit_button("Enter Engine"):
+            if USER_DB.get(u_id) == p_wd:
+                st.session_state.authenticated = True
+                st.session_state.current_user = u_id
+                st.rerun()
+            else:
+                st.error("Invalid Credentials.")
     st.stop()
 
 client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# --- 2. ELITE PDF ENGINE (Branded & Structured) ---
+# --- 2. ELITE PDF ENGINE ---
 class AssementoPDF(FPDF):
     def header(self):
         self.set_fill_color(40, 70, 120)
         self.rect(0, 0, 210, 25, 'F')
         self.set_text_color(255, 255, 255)
         self.set_font('helvetica', 'B', 15)
-        self.cell(0, 15, 'ASSEMENTO: DEEP NEURO-DIAGNOSTIC REPORT', 0, 1, 'C')
+        self.cell(0, 15, f'ASSEMENTO: {st.session_state.get("current_user")} - NEURO-DIAGNOSTIC', 0, 1, 'C')
         self.ln(10)
 
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('helvetica', 'I', 8)
-        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
-
-def get_pdf_bytes(report_text, title):
+def get_pdf_bytes(text, title):
     pdf = AssementoPDF()
     pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    
     pdf.set_font("helvetica", "B", 14)
-    pdf.set_text_color(40, 70, 120)
-    pdf.cell(0, 10, title, ln=True, align='L')
-    pdf.line(10, 45, 200, 45)
-    pdf.ln(10)
-    
+    pdf.cell(0, 10, title, ln=True)
     pdf.set_font("helvetica", "", 10)
-    pdf.set_text_color(0, 0, 0)
-    # Renders the deep report with clean line heights
-    pdf.multi_cell(0, 7, txt=report_text.encode('latin-1', 'replace').decode('latin-1'))
-    
+    pdf.multi_cell(0, 7, txt=text.encode('latin-1', 'replace').decode('latin-1'))
     return bytes(pdf.output())
 
-# --- 3. DEEP DIAGNOSTIC AGENT ---
+# --- 3. MULTI-AGENT FUNCTIONS ---
+def agent_assessment_creator(lo, count, tiers):
+    aid = f"AID-{st.session_state.current_user}-{int(time.time())}"
+    prompt = f"Create a {count}-question diagnostic for LO: {lo}. Tiers: {tiers}. Output ONLY JSON: 'questions': [{{id, level, question, options:[], correct, misconception_map:{{index:reason}} }}]"
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "system", "content": "You are the Assemento Assessment Creator."},
+                  {"role": "user", "content": prompt}],
+        response_format={"type": "json_object"}
+    )
+    return json.loads(response.choices[0].message.content), aid
+
 def agent_diagnostic_engine(lo, student_data, scope="Class"):
-    prompt = f"""
-    ROLE: Elite Educational Neuro-Diagnostician.
-    SCOPE: {scope} Analysis for LO: {lo}.
-    DATA: {student_data}
-    
-    TASK: Generate an IN-DEPTH diagnostic report. Do not use generic summaries.
-    
-    STRUCTURE:
-    1. COGNITIVE GAP ANALYSIS: Identify the exact mental models that are broken (e.g., 'Linear Reasoning Error').
-    2. MISCONCEPTION HEATMAP: Which specific distractors are being confused and WHY?
-    3. THE R-R-R REMEDIAL PLAN:
-       - RECALL: Foundational facts the student must re-memorize.
-       - RELEARN: Concepts the student must see through a 'Cognitive Conflict' (e.g., an experiment).
-       - REVISE: A 3-day step-by-step action plan.
-    4. PREDICTIVE RISK: What will this student struggle with in the NEXT chapter if this isn't fixed?
-    """
+    prompt = f"Perform an IN-DEPTH diagnostic for LO: {lo}. Scope: {scope}. Use Recall-Relearn-Revise. Data: {student_data}"
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "system", "content": "You are the Assemento Diagnostic Engine."},
@@ -74,48 +70,44 @@ def agent_diagnostic_engine(lo, student_data, scope="Class"):
     )
     return response.choices[0].message.content
 
-# --- 4. UI LOGIC ---
-st.title("🎯 Assemento Elite: Multi-Agent Intelligence")
+# --- 4. MAIN INTERFACE ---
+st.title(f"🚀 Assemento Elite: {st.session_state.current_user}")
 tab1, tab2 = st.tabs(["🏗️ Creator", "📊 Diagnostic Engine"])
 
+# RESTORED TAB 1 CONTROLS
 with tab1:
-    lo_in = st.text_input("Learning Outcome", "Human Respiratory System")
-    # (Existing Creator Logic...)
+    st.subheader("Assessment Architect")
+    lo_in = st.text_input("Learning Outcome", "Newton's Laws")
+    c1, c2 = st.columns(2)
+    q_num = c1.slider("Number of Questions", 5, 15, 8)
+    tiers = c2.multiselect("Difficulty Tiers", ["Foundation", "Understanding", "Analytical", "Mastery"], ["Foundation", "Analytical"])
+    
+    # RESTORED BUTTON
+    if st.button("🚀 Run Assemento Creator"):
+        with st.spinner("Generating tiered assessment..."):
+            test_json, aid = agent_assessment_creator(lo_in, q_num, tiers)
+            st.session_state.active_test = test_json
+            st.session_state.active_aid = aid
+            st.success(f"Assessment Created! ID: {aid}")
 
+    if 'active_test' in st.session_state:
+        st.download_button("📥 Download Test (PDF)", 
+                          get_pdf_bytes(str(st.session_state.active_test), f"Test: {lo_in}"), 
+                          "Test.pdf")
+
+# TAB 2 ENGINE
 with tab2:
-    uploaded = st.file_uploader("Upload Student Marks (Excel)", type=["xlsx"])
+    uploaded = st.file_uploader("Upload Excel", type=["xlsx"])
     if uploaded:
         df = pd.read_excel(uploaded)
-        st.write("### 📈 Visual Proficiency Overview")
-        st.plotly_chart(px.pie(df, names='Score', title="Class Proficiency Breakdown", hole=0.4), use_container_width=True)
+        st.plotly_chart(px.pie(df, names='Score', title="Class Proficiency", hole=0.4))
         
-        # --- CLASS-WIDE REPORT ---
-        if st.button("🧠 Generate In-Depth Class Report"):
-            with st.spinner("Analyzing neural patterns..."):
-                class_report = agent_diagnostic_engine(lo_in, df.to_json(), "Class")
-                st.session_state.class_report = class_report
-                st.markdown(class_report)
+        if st.button("🧠 Run Deep Diagnostic"):
+            report = agent_diagnostic_engine(lo_in, df.to_json())
+            st.session_state.last_report = report
+            st.markdown(report)
         
-        if 'class_report' in st.session_state:
-            st.download_button("📥 Download Class Report (PDF)", 
-                              get_pdf_bytes(st.session_state.class_report, f"Class Analysis: {lo_in}"), 
-                              "Class_Diagnostic.pdf")
-
-        st.divider()
-        
-        # --- INDIVIDUAL REPORT DROPDOWN ---
-        st.subheader("👤 Individual Student Dossier")
-        student_list = df['Student_Name'].tolist()
-        selected_student = st.selectbox("Select Student", student_list)
-        
-        if st.button(f"👤 Generate In-Depth Report for {selected_student}"):
-            student_data = df[df['Student_Name'] == selected_student].to_json()
-            with st.spinner(f"Diagnosing {selected_student}..."):
-                indiv_report = agent_diagnostic_engine(lo_in, student_data, selected_student)
-                st.session_state.indiv_report = indiv_report
-                st.info(indiv_report)
-        
-        if 'indiv_report' in st.session_state:
-            st.download_button("📥 Download Individual PDF", 
-                              get_pdf_bytes(st.session_state.indiv_report, f"Report: {selected_student}"), 
-                              f"Report_{selected_student}.pdf")
+        if 'last_report' in st.session_state:
+            st.download_button("📥 Download Diagnostic PDF", 
+                              get_pdf_bytes(st.session_state.last_report, "Neuro-Diagnostic Report"), 
+                              "Report.pdf")
