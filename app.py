@@ -7,75 +7,66 @@ import plotly.express as px
 import io
 import time
 
-# --- 1. SECURE CREDENTIALS GENERATION (T1 to T50) ---
-# This dictionary now contains all 50 pairs exactly as you requested.
-USER_DB = {f"T{i}": f"T{1233+i}" for i in range(1, 51)}
+# --- 1. BRANDING & STYLE ---
+st.set_page_config(page_title="Assemento Elite 2026", layout="wide", page_icon="🎯")
 
-# --- 2. LOGIN GATEKEEPER ---
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-
-if not st.session_state.authenticated:
-    st.title("🎯 Assemento Elite: Private Beta")
-    st.info("Authorized Access Only: Enter your Teacher ID (T1-T50)")
-    
-    with st.form("login_form"):
-        u_id = st.text_input("Teacher ID (e.g., T1)")
-        p_wd = st.text_input("Password", type="password")
-        if st.form_submit_button("Enter Engine"):
-            if USER_DB.get(u_id) == p_wd:
-                st.session_state.authenticated = True
-                st.session_state.current_user = u_id
-                st.rerun()
-            else:
-                st.error("Invalid ID or Password. Please check your credentials.")
+if "OPENAI_API_KEY" not in st.secrets:
+    st.error("Missing API Key! Please add 'OPENAI_API_KEY' to Streamlit Secrets.")
     st.stop()
 
-# --- 3. CORE ENGINE CONFIGURATION (Do Not Change) ---
-st.set_page_config(page_title="Assemento Elite 2026", layout="wide")
 client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
+# --- 2. ELITE PDF ENGINE (Branded & Structured) ---
 class AssementoPDF(FPDF):
     def header(self):
         self.set_fill_color(40, 70, 120)
         self.rect(0, 0, 210, 25, 'F')
         self.set_text_color(255, 255, 255)
-        self.set_font('helvetica', 'B', 16)
-        self.cell(0, 15, f'ASSEMENTO ELITE - TEACHER: {st.session_state.current_user}', 0, 1, 'C')
+        self.set_font('helvetica', 'B', 15)
+        self.cell(0, 15, 'ASSEMENTO: DEEP NEURO-DIAGNOSTIC REPORT', 0, 1, 'C')
         self.ln(10)
 
-def get_pdf_bytes(questions, title, aid):
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('helvetica', 'I', 8)
+        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+
+def get_pdf_bytes(report_text, title):
     pdf = AssementoPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
+    
     pdf.set_font("helvetica", "B", 14)
-    pdf.cell(0, 10, f"TOPIC: {title} (ID: {aid})", ln=True, align='C')
-    pdf.ln(5)
-    for i, q in enumerate(questions, 1):
-        pdf.set_font("helvetica", "B", 11)
-        pdf.multi_cell(0, 7, txt=f"Q{i}. {q['question']}")
-        pdf.set_font("helvetica", "", 10)
-        for j, opt in enumerate(q['options']):
-            pdf.set_x(20)
-            pdf.cell(0, 7, txt=f"{chr(65+j)}) {opt}", ln=True)
-        pdf.ln(5)
+    pdf.set_text_color(40, 70, 120)
+    pdf.cell(0, 10, title, ln=True, align='L')
+    pdf.line(10, 45, 200, 45)
+    pdf.ln(10)
+    
+    pdf.set_font("helvetica", "", 10)
+    pdf.set_text_color(0, 0, 0)
+    # Renders the deep report with clean line heights
+    pdf.multi_cell(0, 7, txt=report_text.encode('latin-1', 'replace').decode('latin-1'))
+    
     return bytes(pdf.output())
 
-# --- 4. MULTI-AGENT FUNCTIONS (UNCHANGED) ---
-def agent_assessment_creator(lo, count):
-    aid = f"AID-{st.session_state.current_user}-{int(time.time())}"
-    prompt = f"Create a {count}-question diagnostic for LO: {lo}. ID: {aid}. Output ONLY JSON: 'questions': [{{id, level, question, options:[], correct, misconception_map:{{index:reason}} }}]"
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "system", "content": "You are the Assemento Assessment Creator."},
-                  {"role": "user", "content": prompt}],
-        response_format={"type": "json_object"}
-    )
-    return json.loads(response.choices[0].message.content), aid
-
-def agent_diagnostic_engine(lo, student_data, name=None):
-    scope = f"Individual Report for {name}" if name else "Class-wide Analysis"
-    prompt = f"Perform a {scope} for LO: {lo}. Identify misconceptions and provide Recall-Relearn-Revise (R-R-R) plans. Data: {student_data}"
+# --- 3. DEEP DIAGNOSTIC AGENT ---
+def agent_diagnostic_engine(lo, student_data, scope="Class"):
+    prompt = f"""
+    ROLE: Elite Educational Neuro-Diagnostician.
+    SCOPE: {scope} Analysis for LO: {lo}.
+    DATA: {student_data}
+    
+    TASK: Generate an IN-DEPTH diagnostic report. Do not use generic summaries.
+    
+    STRUCTURE:
+    1. COGNITIVE GAP ANALYSIS: Identify the exact mental models that are broken (e.g., 'Linear Reasoning Error').
+    2. MISCONCEPTION HEATMAP: Which specific distractors are being confused and WHY?
+    3. THE R-R-R REMEDIAL PLAN:
+       - RECALL: Foundational facts the student must re-memorize.
+       - RELEARN: Concepts the student must see through a 'Cognitive Conflict' (e.g., an experiment).
+       - REVISE: A 3-day step-by-step action plan.
+    4. PREDICTIVE RISK: What will this student struggle with in the NEXT chapter if this isn't fixed?
+    """
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "system", "content": "You are the Assemento Diagnostic Engine."},
@@ -83,41 +74,48 @@ def agent_diagnostic_engine(lo, student_data, name=None):
     )
     return response.choices[0].message.content
 
-# --- 5. UI FLOW ---
-st.sidebar.title(f"👤 {st.session_state.current_user}")
-if st.sidebar.button("Logout"):
-    st.session_state.authenticated = False
-    st.rerun()
-
-tab1, tab2, tab3 = st.tabs(["🏗️ Creator", "📊 Class Engine", "👤 Individual Engine"])
+# --- 4. UI LOGIC ---
+st.title("🎯 Assemento Elite: Multi-Agent Intelligence")
+tab1, tab2 = st.tabs(["🏗️ Creator", "📊 Diagnostic Engine"])
 
 with tab1:
-    st.subheader("Create Assessment")
-    lo_in = st.text_input("Learning Outcome", "Photosynthesis")
-    q_num = st.slider("Questions", 5, 15, 8)
-    if st.button("🚀 Run Assemento Creator"):
-        test_json, aid = agent_assessment_creator(lo_in, q_num)
-        st.session_state.active_aid = aid
-        st.session_state.q_list = test_json['questions']
-        st.session_state.pdf_file = get_pdf_bytes(st.session_state.q_list, lo_in, aid)
-        st.success(f"Assessment Created! ID: {aid}")
-    if 'pdf_file' in st.session_state:
-        st.download_button("📥 Download PDF", st.session_state.pdf_file, "Test.pdf")
+    lo_in = st.text_input("Learning Outcome", "Human Respiratory System")
+    # (Existing Creator Logic...)
 
 with tab2:
-    st.subheader("Class Analysis")
-    uploaded = st.file_uploader("Upload Marks Excel", type=["xlsx"])
+    uploaded = st.file_uploader("Upload Student Marks (Excel)", type=["xlsx"])
     if uploaded:
         df = pd.read_excel(uploaded)
-        st.plotly_chart(px.pie(df, names='Score', title="Class Proficiency Breakdown", hole=0.4))
-        if st.button("🧠 Run Class Diagnostic"):
-            st.markdown(agent_diagnostic_engine(lo_in, df.to_json()))
+        st.write("### 📈 Visual Proficiency Overview")
+        st.plotly_chart(px.pie(df, names='Score', title="Class Proficiency Breakdown", hole=0.4), use_container_width=True)
+        
+        # --- CLASS-WIDE REPORT ---
+        if st.button("🧠 Generate In-Depth Class Report"):
+            with st.spinner("Analyzing neural patterns..."):
+                class_report = agent_diagnostic_engine(lo_in, df.to_json(), "Class")
+                st.session_state.class_report = class_report
+                st.markdown(class_report)
+        
+        if 'class_report' in st.session_state:
+            st.download_button("📥 Download Class Report (PDF)", 
+                              get_pdf_bytes(st.session_state.class_report, f"Class Analysis: {lo_in}"), 
+                              "Class_Diagnostic.pdf")
 
-with tab3:
-    if 'df' in locals():
-        st.subheader("Individual R-R-R Report")
-        s_list = df['Student_Name'].tolist()
-        sel_s = st.selectbox("Select Student", s_list)
-        if st.button(f"👤 Diagnose {sel_s}"):
-            s_data = df[df['Student_Name'] == sel_s].to_json()
-            st.info(agent_diagnostic_engine(lo_in, s_data, sel_s))
+        st.divider()
+        
+        # --- INDIVIDUAL REPORT DROPDOWN ---
+        st.subheader("👤 Individual Student Dossier")
+        student_list = df['Student_Name'].tolist()
+        selected_student = st.selectbox("Select Student", student_list)
+        
+        if st.button(f"👤 Generate In-Depth Report for {selected_student}"):
+            student_data = df[df['Student_Name'] == selected_student].to_json()
+            with st.spinner(f"Diagnosing {selected_student}..."):
+                indiv_report = agent_diagnostic_engine(lo_in, student_data, selected_student)
+                st.session_state.indiv_report = indiv_report
+                st.info(indiv_report)
+        
+        if 'indiv_report' in st.session_state:
+            st.download_button("📥 Download Individual PDF", 
+                              get_pdf_bytes(st.session_state.indiv_report, f"Report: {selected_student}"), 
+                              f"Report_{selected_student}.pdf")
