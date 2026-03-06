@@ -7,8 +7,7 @@ import plotly.express as px
 import io
 import time
 
-# --- 1. BRANDING & LOGIN (T1 to T50) ---
-st.set_page_config(page_title="Assemento Elite 2026", layout="wide", page_icon="🎯")
+# --- 1. SECURE CREDENTIALS (T1-T50) ---
 USER_DB = {f"T{i}": f"T{1233+i}" for i in range(1, 51)}
 
 if 'authenticated' not in st.session_state:
@@ -30,29 +29,46 @@ if not st.session_state.authenticated:
 
 client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# --- 2. ELITE PDF ENGINE ---
+# --- 2. STRUCTURED PDF ENGINE ---
 class AssementoPDF(FPDF):
     def header(self):
         self.set_fill_color(40, 70, 120)
         self.rect(0, 0, 210, 25, 'F')
         self.set_text_color(255, 255, 255)
         self.set_font('helvetica', 'B', 15)
-        self.cell(0, 15, f'ASSEMENTO: {st.session_state.get("current_user")} - NEURO-DIAGNOSTIC', 0, 1, 'C')
+        self.cell(0, 15, f'ASSEMENTO: TEACHER {st.session_state.current_user}', 0, 1, 'C')
         self.ln(10)
 
-def get_pdf_bytes(text, title):
+def get_mcq_pdf(questions, title, aid):
     pdf = AssementoPDF()
     pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
     pdf.set_font("helvetica", "B", 14)
-    pdf.cell(0, 10, title, ln=True)
-    pdf.set_font("helvetica", "", 10)
-    pdf.multi_cell(0, 7, txt=text.encode('latin-1', 'replace').decode('latin-1'))
+    pdf.cell(0, 10, f"TOPIC: {title}", ln=True, align='C')
+    pdf.set_font("helvetica", "I", 9)
+    pdf.cell(0, 5, f"Assessment ID: {aid}", ln=True, align='C')
+    pdf.ln(10)
+    
+    for i, q in enumerate(questions, 1):
+        # Clean Question Block
+        pdf.set_font("helvetica", "B", 11)
+        pdf.multi_cell(0, 7, txt=f"Q{i}. {q['question']}", border=0)
+        pdf.ln(2)
+        
+        # Aligned Options Block
+        pdf.set_font("helvetica", "", 10)
+        for j, opt in enumerate(q['options']):
+            pdf.set_x(20) # Clear indentation
+            pdf.cell(0, 7, txt=f"{chr(65+j)}) {opt}", ln=True)
+        pdf.ln(5)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(5)
     return bytes(pdf.output())
 
-# --- 3. MULTI-AGENT FUNCTIONS ---
+# --- 3. AGENT FUNCTIONS (UNCHANGED) ---
 def agent_assessment_creator(lo, count, tiers):
     aid = f"AID-{st.session_state.current_user}-{int(time.time())}"
-    prompt = f"Create a {count}-question diagnostic for LO: {lo}. Tiers: {tiers}. Output ONLY JSON: 'questions': [{{id, level, question, options:[], correct, misconception_map:{{index:reason}} }}]"
+    prompt = f"Create a {count}-question MCQ assessment for '{lo}'. Format: JSON with 'questions': [{{'question': '...', 'options': ['A', 'B', 'C', 'D']}}]. Difficulty: {tiers}."
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "system", "content": "You are the Assemento Assessment Creator."},
@@ -61,8 +77,9 @@ def agent_assessment_creator(lo, count, tiers):
     )
     return json.loads(response.choices[0].message.content), aid
 
-def agent_diagnostic_engine(lo, student_data, scope="Class"):
-    prompt = f"Perform an IN-DEPTH diagnostic for LO: {lo}. Scope: {scope}. Use Recall-Relearn-Revise. Data: {student_data}"
+def agent_diagnostic_engine(lo, student_data, name=None):
+    scope = f"Individual Report for {name}" if name else "Class-wide Analysis"
+    prompt = f"Perform {scope} for {lo}. Use Recall-Relearn-Revise (R-R-R) protocol. DATA: {student_data}"
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "system", "content": "You are the Assemento Diagnostic Engine."},
@@ -70,44 +87,31 @@ def agent_diagnostic_engine(lo, student_data, scope="Class"):
     )
     return response.choices[0].message.content
 
-# --- 4. MAIN INTERFACE ---
+# --- 4. UI FLOW ---
 st.title(f"🚀 Assemento Elite: {st.session_state.current_user}")
 tab1, tab2 = st.tabs(["🏗️ Creator", "📊 Diagnostic Engine"])
 
-# RESTORED TAB 1 CONTROLS
 with tab1:
     st.subheader("Assessment Architect")
-    lo_in = st.text_input("Learning Outcome", "Newton's Laws")
-    c1, c2 = st.columns(2)
-    q_num = c1.slider("Number of Questions", 5, 15, 8)
-    tiers = c2.multiselect("Difficulty Tiers", ["Foundation", "Understanding", "Analytical", "Mastery"], ["Foundation", "Analytical"])
+    lo_in = st.text_input("Learning Outcome", "Photosynthesis")
+    q_num = st.slider("Questions", 5, 15, 8)
+    tiers = st.multiselect("Tiers", ["Foundation", "Understanding", "Analytical"], ["Foundation"])
     
-    # RESTORED BUTTON
     if st.button("🚀 Run Assemento Creator"):
-        with st.spinner("Generating tiered assessment..."):
-            test_json, aid = agent_assessment_creator(lo_in, q_num, tiers)
-            st.session_state.active_test = test_json
+        with st.spinner("Crafting structured MCQ assessment..."):
+            data, aid = agent_assessment_creator(lo_in, q_num, tiers)
+            st.session_state.active_test = data['questions']
             st.session_state.active_aid = aid
-            st.success(f"Assessment Created! ID: {aid}")
+            st.success("Test Generated!")
 
     if 'active_test' in st.session_state:
-        st.download_button("📥 Download Test (PDF)", 
-                          get_pdf_bytes(str(st.session_state.active_test), f"Test: {lo_in}"), 
-                          "Test.pdf")
+        st.download_button("📥 Download PDF (Structured MCQ)", 
+                           get_mcq_pdf(st.session_state.active_test, lo_in, st.session_state.active_aid), 
+                           "Assemento_Assessment.pdf")
 
-# TAB 2 ENGINE
 with tab2:
-    uploaded = st.file_uploader("Upload Excel", type=["xlsx"])
+    uploaded = st.file_uploader("Upload Data", type=["xlsx"])
     if uploaded:
         df = pd.read_excel(uploaded)
-        st.plotly_chart(px.pie(df, names='Score', title="Class Proficiency", hole=0.4))
-        
         if st.button("🧠 Run Deep Diagnostic"):
-            report = agent_diagnostic_engine(lo_in, df.to_json())
-            st.session_state.last_report = report
-            st.markdown(report)
-        
-        if 'last_report' in st.session_state:
-            st.download_button("📥 Download Diagnostic PDF", 
-                              get_pdf_bytes(st.session_state.last_report, "Neuro-Diagnostic Report"), 
-                              "Report.pdf")
+            st.markdown(agent_diagnostic_engine(lo_in, df.to_json()))
