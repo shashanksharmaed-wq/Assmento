@@ -54,17 +54,33 @@ def generate_mcq_pdf(questions, title, aid):
         pdf.ln(5); pdf.line(10, pdf.get_y(), 200, pdf.get_y()); pdf.ln(5)
     return bytes(pdf.output())
 
-# --- 4. MULTI-AGENT ENGINES ---
+# --- 4. MULTI-AGENT ENGINES (FIXED API CALLS) ---
 def agent_creator(lo, count, tiers):
     aid = f"AID-{st.session_state.current_user}-{int(time.time())}"
-    prompt = f"Create a {count}-question MCQ for '{lo}'. Tiers: {tiers}. Format ONLY JSON: 'questions': [{{'question', 'options':[], 'correct', 'misconception_map' }}]"
-    res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "system", "content": "You are Assemento Creator."}], response_format={"type": "json_object"}, user=prompt)
+    # OpenAI JSON mode requires the word "json" in the prompt
+    prompt = f"Create a {count}-question MCQ for '{lo}' in JSON format. Tiers: {tiers}. Structure: 'questions': [{{'question', 'options':[], 'correct', 'misconception_map' }}]"
+    
+    res = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are Assemento Creator. You output only valid JSON."},
+            {"role": "user", "content": prompt}
+        ],
+        response_format={"type": "json_object"}
+    )
     return json.loads(res.choices[0].message.content), aid
 
 def agent_diagnostic(lo, data, name=None):
     scope = f"Individual Report for {name}" if name else "Class-wide Analysis"
     prompt = f"In-depth {scope} for {lo}. Use Recall-Relearn-Revise (R-R-R) logic. DATA: {data}"
-    res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "system", "content": "You are Assemento Diagnostician."}], user=prompt)
+    
+    res = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are Assemento Diagnostician. Provide high-depth remedial plans."},
+            {"role": "user", "content": prompt}
+        ]
+    )
     return res.choices[0].message.content
 
 # --- 5. UI TABS ---
@@ -76,9 +92,11 @@ with tab1:
     q_num = st.slider("Test Length", 5, 15, 10)
     tiers = st.multiselect("Difficulty", ["Foundation", "Understanding", "Analytical", "Mastery"], ["Foundation"])
     if st.button("🚀 Generate Structured MCQ"):
-        test_data, aid = agent_creator(lo_in, q_num, tiers)
-        st.session_state.active_test, st.session_state.active_aid = test_data['questions'], aid
-        st.success("Test Generated!")
+        with st.spinner("AI is crafting the assessment..."):
+            test_data, aid = agent_creator(lo_in, q_num, tiers)
+            st.session_state.active_test, st.session_state.active_aid = test_data['questions'], aid
+            st.success("Test Generated!")
+    
     if st.session_state.active_test:
         st.download_button("📥 Download MCQ PDF", generate_mcq_pdf(st.session_state.active_test, lo_in, st.session_state.active_aid), "Assessment.pdf")
 
@@ -88,15 +106,25 @@ with tab2:
         st.session_state.df = pd.read_excel(up)
         st.plotly_chart(px.pie(st.session_state.df, names='Score', title="Class Mastery", hole=0.4))
         if st.button("🧠 Run Class Diagnostic"):
-            st.markdown(agent_diagnostic(lo_in, st.session_state.df.to_json()))
+            with st.spinner("Analyzing class misconceptions..."):
+                report = agent_diagnostic(lo_in, st.session_state.df.to_json())
+                st.session_state.class_report = report
+                st.markdown(report)
+        
+        if 'class_report' in st.session_state:
+            st.download_button("📥 Download Class Report PDF", generate_mcq_pdf([], "Class Diagnostic", "Summary"), "Class_Report.pdf")
 
 with tab3:
     if st.session_state.df is not None:
         sel_s = st.selectbox("Select Student", st.session_state.df['Student_Name'].unique())
         if st.button(f"👤 Diagnose {sel_s}"):
-            s_data = st.session_state.df[st.session_state.df['Student_Name'] == sel_s].to_json()
-            report = agent_diagnostic(lo_in, s_data, sel_s)
-            st.session_state.last_report = report
-            st.info(report)
+            with st.spinner(f"Creating deep report for {sel_s}..."):
+                s_data = st.session_state.df[st.session_state.df['Student_Name'] == sel_s].to_json()
+                report = agent_diagnostic(lo_in, s_data, sel_s)
+                st.session_state.last_report = report
+                st.info(report)
+        
         if 'last_report' in st.session_state:
-            st.download_button("📥 Download Report PDF", generate_mcq_pdf([], "Individual Report", "R-R-R"), "Report.pdf")
+            st.download_button("📥 Download Individual Report PDF", generate_mcq_pdf([], f"Individual Report: {sel_s}", "R-R-R"), f"Report_{sel_s}.pdf")
+    else:
+        st.warning("Please upload the Excel data sheet in the 'Class Engine' tab first.")
