@@ -1,130 +1,189 @@
 import streamlit as st
 import pandas as pd
-import openai
+from openai import OpenAI
 import json
-from fpdf import FPDF
-import plotly.express as px
-import io
-import time
+import os
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.lib import colors
 
-# --- 1. SESSION STATE PERSISTENCE ---
-if 'authenticated' not in st.session_state: st.session_state.authenticated = False
-if 'active_test' not in st.session_state: st.session_state.active_test = None
-if 'active_aid' not in st.session_state: st.session_state.active_aid = None
-if 'df' not in st.session_state: st.session_state.df = None
+# --- 1. SYSTEM ORCHESTRATION ---
+st.set_page_config(page_title="RemediAI Ultra | Multi-Agent Engine", layout="wide")
 
-# --- 2. 50-TEACHER LOGIN (T1-T50) ---
-USER_DB = {f"T{i}": f"T{1233+i}" for i in range(1, 51)}
-
-if not st.session_state.authenticated:
-    st.title("🎯 Assemento Elite: Private Beta")
-    with st.form("login"):
-        u_id = st.text_input("Teacher ID (T1-T50)")
-        p_wd = st.text_input("Password", type="password")
-        if st.form_submit_button("Enter Engine"):
-            if USER_DB.get(u_id) == p_wd:
-                st.session_state.authenticated = True
-                st.session_state.current_user = u_id
-                st.rerun()
-            else: st.error("Invalid Credentials.")
+if "OPENAI_API_KEY" in st.secrets:
+    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+else:
+    st.error("🔑 OpenAI API Key Missing!")
     st.stop()
 
-client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# Shared Memory (The Vault)
+if 'vault' not in st.session_state: st.session_state['vault'] = {}
 
-# --- 3. THE "STRUCTURED GRID" PDF ENGINE ---
-class AssementoPDF(FPDF):
-    def header(self):
-        self.set_fill_color(40, 70, 120)
-        self.rect(0, 0, 210, 25, 'F')
-        self.set_text_color(255, 255, 255)
-        self.set_font('helvetica', 'B', 15)
-        self.cell(0, 15, f'ASSEMENTO ELITE - TEACHER: {st.session_state.current_user}', 0, 1, 'C')
-        self.ln(10)
-
-def generate_mcq_pdf(questions, title, aid):
-    pdf = AssementoPDF()
-    pdf.add_page()
-    pdf.set_font("helvetica", "B", 14); pdf.cell(0, 10, title, ln=True, align='C')
-    pdf.set_font("helvetica", "I", 9); pdf.cell(0, 5, f"ID: {aid}", ln=True, align='C'); pdf.ln(10)
-    for i, q in enumerate(questions, 1):
-        pdf.set_font("helvetica", "B", 11); pdf.multi_cell(0, 7, txt=f"Q{i}. {q['question']}")
-        pdf.set_font("helvetica", "", 10); pdf.ln(2)
-        for j, opt in enumerate(q['options']):
-            pdf.set_x(20); pdf.cell(0, 7, txt=f"{chr(65+j)}) {opt}", ln=True)
-        pdf.ln(5); pdf.line(10, pdf.get_y(), 200, pdf.get_y()); pdf.ln(5)
-    return bytes(pdf.output())
-
-# --- 4. MULTI-AGENT ENGINES (FIXED API CALLS) ---
-def agent_creator(lo, count, tiers):
-    aid = f"AID-{st.session_state.current_user}-{int(time.time())}"
-    # OpenAI JSON mode requires the word "json" in the prompt
-    prompt = f"Create a {count}-question MCQ for '{lo}' in JSON format. Tiers: {tiers}. Structure: 'questions': [{{'question', 'options':[], 'correct', 'misconception_map' }}]"
+# --- AGENT A: THE PSYCHOMETRICIAN ---
+# Specialized in distractor engineering and scenario creation
+def agent_psychometrician(topic, grade, num_q, diff):
+    prompt = f"""
+    Role: Senior Psychometrician at EI ASSET.
+    Task: Create {num_q} 'Deep Diagnostic' MCQs for Grade {grade} on {topic}.
+    Difficulty: {diff}/12.
     
-    res = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "You are Assemento Creator. You output only valid JSON."},
-            {"role": "user", "content": prompt}
-        ],
+    CONSTRAINTS:
+    - Use 'Scenario-Based' questions (e.g., 'If X happened, what would be the result?').
+    - Every wrong option (B, C, D) must represent a 'Smart Distractor' (a common misconception).
+    - NO literal or knowledge-based questions.
+    - NO diagrams.
+    
+    OUTPUT FORMAT: JSON ONLY
+    {{ "questions": [ {{ "id": 1, "q": "...", "options": {{"A":"","B":"","C":"","D":""}}, "correct": "A", "mappings": {{"B":"Misconception Description", "C":"Misconception Description", "D":"Logic Error"}}, "remedy": "Pedagogical intervention." }} ] }}
+    """
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "system", "content": "You are a master of educational diagnostic design."},
+                  {"role": "user", "content": prompt}],
         response_format={"type": "json_object"}
     )
-    return json.loads(res.choices[0].message.content), aid
+    return json.loads(response.choices[0].message.content)
 
-def agent_diagnostic(lo, data, name=None):
-    scope = f"Individual Report for {name}" if name else "Class-wide Analysis"
-    prompt = f"In-depth {scope} for {lo}. Use Recall-Relearn-Revise (R-R-R) logic. DATA: {data}"
+# --- AGENT B: THE DOCUMENT ARCHITECT ---
+# Specialized in multicolored, branded, print-ready PDF design
+def agent_document_architect(metadata, info, school_name):
+    buffer = BytesIO()
+    p = canvas.Canvas(buffer, pagesize=A4)
+    w, h = A4
     
-    res = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "You are Assemento Diagnostician. Provide high-depth remedial plans."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    return res.choices[0].message.content
-
-# --- 5. UI TABS ---
-st.title(f"🚀 Assemento Elite: {st.session_state.current_user}")
-tab1, tab2, tab3 = st.tabs(["🏗️ Assessment Creator", "📊 Class Engine", "👤 Individual Engine"])
-
-with tab1:
-    lo_in = st.text_input("Learning Outcome", "Human Physiology")
-    q_num = st.slider("Test Length", 5, 15, 10)
-    tiers = st.multiselect("Difficulty", ["Foundation", "Understanding", "Analytical", "Mastery"], ["Foundation"])
-    if st.button("🚀 Generate Structured MCQ"):
-        with st.spinner("AI is crafting the assessment..."):
-            test_data, aid = agent_creator(lo_in, q_num, tiers)
-            st.session_state.active_test, st.session_state.active_aid = test_data['questions'], aid
-            st.success("Test Generated!")
+    # Branded Header (Deep Blue)
+    p.setFillColor(colors.HexColor("#1e3a8a"))
+    p.rect(0, h - 90, w, 90, fill=1, stroke=0)
+    p.setFillColor(colors.white)
+    p.setFont("Helvetica-Bold", 18)
+    p.drawCentredString(w/2, h - 40, school_name.upper())
+    p.setFont("Helvetica", 10)
+    p.drawCentredString(w/2, h - 60, f"DIAGNOSTIC ASSESSMENT | {info['aid']}")
     
-    if st.session_state.active_test:
-        st.download_button("📥 Download MCQ PDF", generate_mcq_pdf(st.session_state.active_test, lo_in, st.session_state.active_aid), "Assessment.pdf")
+    # Metadata Bar (Grey)
+    p.setLineWidth(1)
+    p.setStrokeColor(colors.lightgrey)
+    p.setFillColor(colors.HexColor("#f1f5f9"))
+    p.rect(40, h - 120, w - 80, 25, fill=1, stroke=1)
+    p.setFillColor(colors.black)
+    p.setFont("Helvetica-Bold", 9)
+    p.drawString(50, h - 113, f"GRADE: {info['grade']}  |  TOPIC: {info['topic']}")
+    p.drawRightString(w - 50, h - 113, f"TIME: {info['time']} MINS")
 
-with tab2:
-    up = st.file_uploader("Upload Data (Excel)", type=["xlsx"])
-    if up:
-        st.session_state.df = pd.read_excel(up)
-        st.plotly_chart(px.pie(st.session_state.df, names='Score', title="Class Mastery", hole=0.4))
-        if st.button("🧠 Run Class Diagnostic"):
-            with st.spinner("Analyzing class misconceptions..."):
-                report = agent_diagnostic(lo_in, st.session_state.df.to_json())
-                st.session_state.class_report = report
-                st.markdown(report)
+    # Question Layout
+    y = h - 160
+    for q in metadata.get('questions', []):
+        if y < 150: p.showPage(); y = h - 50
+        p.setFont("Helvetica-Bold", 11)
+        p.setFillColor(colors.HexColor("#1e3a8a"))
+        p.drawString(50, y, f"Q{q['id']}.")
+        p.setFillColor(colors.black)
         
-        if 'class_report' in st.session_state:
-            st.download_button("📥 Download Class Report PDF", generate_mcq_pdf([], "Class Diagnostic", "Summary"), "Class_Report.pdf")
+        # Simple Wrapping
+        text = q.get('q') or q.get('question')
+        p.drawString(75, y, text[:80])
+        if len(text) > 80:
+            y -= 15
+            p.drawString(75, y, text[80:])
+            
+        y -= 25
+        p.setFont("Helvetica", 10)
+        opts = q.get('options', {})
+        for lbl in ["A", "B", "C", "D"]:
+            p.drawString(85, y, f"{lbl}) {opts.get(lbl)}")
+            y -= 18
+        y -= 20
 
-with tab3:
-    if st.session_state.df is not None:
-        sel_s = st.selectbox("Select Student", st.session_state.df['Student_Name'].unique())
-        if st.button(f"👤 Diagnose {sel_s}"):
-            with st.spinner(f"Creating deep report for {sel_s}..."):
-                s_data = st.session_state.df[st.session_state.df['Student_Name'] == sel_s].to_json()
-                report = agent_diagnostic(lo_in, s_data, sel_s)
-                st.session_state.last_report = report
-                st.info(report)
+    p.save()
+    buffer.seek(0)
+    return buffer
+
+# --- AGENT C: DATA DIAGNOSTIC ENGINE ---
+# Handles Excel templates and mapping results back to misconceptions
+def agent_data_engine(aid, uploaded_file):
+    if aid not in st.session_state['vault']:
+        return None, "Assessment ID not found."
+    
+    results_df = pd.read_excel(uploaded_file)
+    vault = st.session_state['vault'][aid]
+    meta = vault['meta']
+    
+    diagnostics = []
+    for _, row in results_df.iterrows():
+        student_report = {"name": row['Student Name'], "errors": []}
+        for q in meta['questions']:
+            q_id = f"Q{q['id']}"
+            ans = str(row[q_id]).strip().upper()
+            if ans != q['correct']:
+                student_report['errors'].append({
+                    "q": q['id'],
+                    "choice": ans,
+                    "gap": q['mappings'].get(ans, "Conceptual Error"),
+                    "fix": q['remedy']
+                })
+        diagnostics.append(student_report)
+    return diagnostics, None
+
+# --- UI WORKFLOW ---
+st.title("🎯 RemediAI Ultra: Multi-Agent Edition")
+t1, t2, t3 = st.tabs(["🏗️ Phase 1: Creator", "📤 Phase 2: Upload", "📊 Phase 3: Reports"])
+
+with t1:
+    c1, c2 = st.columns(2)
+    with c1:
+        u_school = st.text_input("School Name", "Global International Academy")
+        u_topic = st.text_input("Topic", "Photosynthesis & Plant Biology")
+        u_grade = st.selectbox("Grade", ["4", "5", "6", "10"])
+    with c2:
+        u_num = st.number_input("Questions", 1, 15, 5)
+        u_time = st.number_input("Time (Mins)", 10, 180, 40)
+        u_aid = st.text_input("Assessment ID", value="DIAG-01")
+
+    if st.button("🚀 EXECUTE MULTI-AGENT GENERATION"):
+        # Trigger Agent A
+        meta = agent_psychometrician(u_topic, u_grade, u_num, 9)
+        info = {"aid": u_aid, "grade": u_grade, "topic": u_topic, "time": u_time}
         
-        if 'last_report' in st.session_state:
-            st.download_button("📥 Download Individual Report PDF", generate_mcq_pdf([], f"Individual Report: {sel_s}", "R-R-R"), f"Report_{sel_s}.pdf")
-    else:
-        st.warning("Please upload the Excel data sheet in the 'Class Engine' tab first.")
+        # Save to Vault
+        st.session_state['vault'][u_aid] = {"meta": meta, "info": info}
+        
+        # Trigger Agent B
+        pdf = agent_document_architect(meta, info, u_school)
+        st.download_button("📥 Download Branded PDF", pdf, f"{u_aid}.pdf")
+        
+        # Trigger Agent C (Template Generation)
+        xl_df = pd.DataFrame(columns=["Student Name"] + [f"Q{i+1}" for i in range(u_num)])
+        out = BytesIO()
+        with pd.ExcelWriter(out, engine='xlsxwriter') as writer:
+            xl_df.to_excel(writer, index=False)
+        st.download_button("📥 Download Excel Template", out.getvalue(), f"Template_{u_aid}.xlsx")
+
+with t2:
+    st.header("Upload Response Data")
+    in_aid = st.text_input("Confirm Assessment ID")
+    xl_file = st.file_uploader("Upload Excel File", type=["xlsx"])
+    if xl_file and in_aid:
+        st.success("File Received. Ready for Phase 3.")
+
+with t3:
+    st.header("Diagnostic Dashboard")
+    active_id = st.selectbox("Select Assessment ID", list(st.session_state['vault'].keys()))
+    if active_id and xl_file:
+        reports, err = agent_data_engine(active_id, xl_file)
+        if err:
+            st.error(err)
+        else:
+            student = st.selectbox("Select Student for Diagnosis", [r['name'] for r in reports])
+            rep = next(r for r in reports if r['name'] == student)
+            
+            if not rep['errors']:
+                st.success(f"{student} demonstrated 100% Mastery.")
+            for e in rep['errors']:
+                st.markdown(f"""
+                <div style="background-color: white; padding: 20px; border-radius: 10px; border-left: 5px solid #1e3a8a; margin-bottom: 10px;">
+                    <b>Question {e['q']} - Incorrect (Selected {e['choice']})</b><br>
+                    <i>Detected Misconception:</i> {e['gap']}<br>
+                    <b>📍 Remediation:</b> {e['fix']}
+                </div>
+                """, unsafe_allow_html=True)
