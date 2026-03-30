@@ -4,12 +4,13 @@ from openai import OpenAI
 import json
 import os
 from io import BytesIO
+from pyairtable import Api
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 
-# --- 1. CORE SYSTEM SETUP ---
-st.set_page_config(page_title="RemediAI Ultra | Multi-Agent Diagnostic", layout="wide")
+# --- 1. SYSTEM SETUP & CLOUD SYNC ---
+st.set_page_config(page_title="RemediAI Ultra | Universal Sync", layout="wide")
 
 st.markdown("""
     <style>
@@ -22,11 +23,13 @@ st.markdown("""
         background-color: white; padding: 20px; border-radius: 12px; 
         box-shadow: 0 4px 12px rgba(0,0,0,0.05); border-left: 6px solid #1e3a8a; margin-bottom: 15px;
     }
-    .executive-banner {
-        background-color: #fff1f2; border-left: 5px solid #e11d48; padding: 20px; border-radius: 8px; margin-bottom: 20px;
-    }
     </style>
     """, unsafe_allow_html=True)
+
+# Connection Agents
+def get_airtable():
+    api = Api(st.secrets["AIRTABLE_TOKEN"])
+    return api.table(st.secrets["AIRTABLE_BASE_ID"], st.secrets["AIRTABLE_TABLE_NAME"])
 
 if "OPENAI_API_KEY" in st.secrets:
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
@@ -34,24 +37,24 @@ else:
     st.error("🔑 OpenAI API Key Missing!")
     st.stop()
 
-if 'vault' not in st.session_state: st.session_state['vault'] = {}
-
-# --- AGENT A: THE PSYCHOMETRICIAN ---
-def agent_psychometrician(topic, grade, num_q, diff):
-    prompt = f"Create {num_q} 'Deep Diagnostic' MCQs for Grade {grade} on {topic}. Difficulty {diff}/12. Options must be misconception-driven. Return JSON with questions, options, correct, mappings, and remedy."
+# --- AGENT A: THE PSYCHOMETRICIAN (DIAGNOSTIC LOGIC) ---
+def agent_psychometrician(topic, grade, num_q):
+    prompt = f"Create {num_q} deep diagnostic MCQs for Grade {grade} on {topic}. Every wrong option must be a specific misconception. Return JSON with questions, options, correct, mappings, and remedy."
     response = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "system", "content": "You are a master of educational diagnostic design like EI ASSET."},
+        messages=[{"role": "system", "content": "You are a master psychometrician for EI ASSET."},
                   {"role": "user", "content": prompt}],
         response_format={"type": "json_object"}
     )
     return json.loads(response.choices[0].message.content)
 
-# --- AGENT B: THE DOCUMENT ARCHITECT (PAPER) ---
+# --- AGENT B: THE DOCUMENT ARCHITECT (BRANDED PDF) ---
 def agent_document_architect(metadata, info, school_name):
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     w, h = A4
+    
+    # Header Banner (Deep Blue)
     p.setFillColor(colors.HexColor("#1e3a8a"))
     p.rect(0, h-90, w, 90, fill=1, stroke=0)
     p.setFillColor(colors.white)
@@ -65,7 +68,8 @@ def agent_document_architect(metadata, info, school_name):
         if y < 150: p.showPage(); y = h-50
         p.setFont("Helvetica-Bold", 11)
         p.setFillColor(colors.black)
-        p.drawString(50, y, f"Q{q['id']}. {q.get('q') or q.get('question')}")
+        q_text = q.get('q') or q.get('question') or "N/A"
+        p.drawString(50, y, f"Q{q['id']}. {q_text}")
         y -= 25
         opts = q.get('options', {})
         for lbl in ["A", "B", "C", "D"]:
@@ -81,105 +85,82 @@ def agent_executive_dean(reports, info, school_name):
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     w, h = A4
-    
-    # Elegant Branding
-    p.setFillColor(colors.HexColor("#9f1239")) # Crimson Theme for Leadership
+    p.setFillColor(colors.HexColor("#9f1239"))
     p.rect(0, h-100, w, 100, fill=1, stroke=0)
     p.setFillColor(colors.white)
     p.setFont("Helvetica-Bold", 18)
     p.drawCentredString(w/2, h-45, f"{school_name.upper()} - EXECUTIVE SUMMARY")
-    p.setFont("Helvetica", 12)
-    p.drawCentredString(w/2, h-70, f"Diagnostic Assessment: {info['topic']}")
-    
-    # Accuracy Stats
-    total_q = len(reports[0]['errors']) + 1 # Rough estimate
-    correct_total = sum([1 for r in reports if not r['errors']])
-    
-    p.setFillColor(colors.black)
-    p.setFont("Helvetica-Bold", 14)
-    p.drawString(50, h-140, "Institutional Health Overview")
-    p.setFont("Helvetica", 11)
-    p.drawString(50, h-160, f"Assessment ID: {info['aid']}  |  Grade: {info['grade']}")
-    p.drawString(50, h-175, f"Overall Class Proficiency: {int((correct_total/len(reports))*100)}%")
-    
-    # Systemic Gaps
-    p.setFont("Helvetica-Bold", 14)
-    p.drawString(50, h-210, "Top Systemic Misconceptions (Action Items)")
-    y = h-235
-    
-    clusters = {}
-    for r in reports:
-        for e in r['errors']:
-            gap = e['gap']
-            clusters[gap] = clusters.get(gap, 0) + 1
-            
-    for gap, count in sorted(clusters.items(), key=lambda x: x[1], reverse=True)[:3]:
-        p.setFont("Helvetica-Bold", 11)
-        p.drawString(60, y, f"• {gap}")
-        p.setFont("Helvetica", 10)
-        p.drawString(70, y-15, f"Frequency: {count} students affected. Strategy: Remedial intervention required.")
-        y -= 40
-
     p.save()
     buffer.seek(0)
     return buffer
 
-# --- APP FLOW ---
-st.title("🎯 RemediAI Ultra: The Multi-Agent Diagnostic Engine")
-t1, t2, t3 = st.tabs(["🏗️ Creator", "📤 Upload", "📊 Strategic Dashboard"])
+# --- UI WORKFLOW ---
+st.title("🚀 RemediAI Ultra: Universal Institutional Suite")
+t1, t2, t3 = st.tabs(["🏗️ Phase 1: Create", "📤 Phase 2: Upload", "📊 Phase 3: Reports"])
 
 with t1:
     c1, c2 = st.columns(2)
     with c1:
         u_school = st.text_input("School Name", "Global International Academy")
-        u_topic = st.text_input("Topic", "Photosynthesis")
+        u_topic = st.text_input("Topic", "A Letter to God")
         u_grade = st.selectbox("Grade", ["9", "10", "11"])
     with c2:
-        u_num = st.number_input("Questions", 1, 15, 5)
-        u_aid = st.text_input("Assessment ID", value="DIAG-01")
+        u_num = st.number_input("No. of Questions", 1, 15, 5)
+        u_aid = st.text_input("Assessment ID", value="DIAG-101")
 
-    if st.button("🚀 EXECUTE FULL GENERATION"):
-        meta = agent_psychometrician(u_topic, u_grade, u_num, 9)
-        info = {"aid": u_aid, "grade": u_grade, "topic": u_topic}
-        st.session_state['vault'][u_aid] = {"meta": meta, "info": info}
-        
-        pdf = agent_document_architect(meta, info, u_school)
-        st.download_button("📥 Download Branded Question Paper", pdf, f"{u_aid}.pdf")
-        
-        xl_df = pd.DataFrame(columns=["Student Name"] + [f"Q{i+1}" for i in range(u_num)])
-        out = BytesIO()
-        with pd.ExcelWriter(out, engine='xlsxwriter') as writer:
-            xl_df.to_excel(writer, index=False)
-        st.download_button("📥 Download Excel Response Template", out.getvalue(), f"Template_{u_aid}.xlsx")
+    if st.button("🚀 GENERATE & SYNC TO CLOUD"):
+        with st.spinner("Engineering high-fidelity misconceptions..."):
+            meta = agent_psychometrician(u_topic, u_grade, u_num)
+            info = {"aid": u_aid, "grade": u_grade, "topic": u_topic}
+            
+            # SAVE TO AIRTABLE (Universal Sync)
+            table = get_airtable()
+            table.create({
+                "Assessment_ID": u_aid,
+                "Metadata": json.dumps(meta),
+                "Topic": u_topic,
+                "School": u_school
+            })
+            
+            st.success(f"Assessment {u_aid} is now archived in the Cloud.")
+            
+            pdf = agent_document_architect(meta, info, u_school)
+            st.download_button("📥 Download Branded Paper", pdf, f"{u_aid}.pdf")
+            
+            xl_df = pd.DataFrame(columns=["Student Name"] + [f"Q{i+1}" for i in range(u_num)])
+            out = BytesIO()
+            with pd.ExcelWriter(out, engine='xlsxwriter') as writer:
+                xl_df.to_excel(writer, index=False)
+            st.download_button("📥 Download Response Template", out.getvalue(), f"Template_{u_aid}.xlsx")
 
 with t2:
-    in_aid = st.text_input("Enter Assessment ID")
-    xl_file = st.file_uploader("Upload Excel", type=["xlsx"])
-    if xl_file and in_aid:
-        st.success("Responses ready for strategic analysis.")
+    st.header("Upload Results for Any Cloud-Stored ID")
+    table = get_airtable()
+    records = table.all()
+    ids = [r['fields']['Assessment_ID'] for r in records]
+    
+    sel_id = st.selectbox("Select Assessment ID from Cloud Archive:", ["Select..."] + ids)
+    if sel_id != "Select...":
+        xl_file = st.file_uploader("Upload Excel Responses", type=["xlsx"])
+        if xl_file:
+            rec = next(r for r in records if r['fields']['Assessment_ID'] == sel_id)
+            st.session_state['active_logic'] = json.loads(rec['fields']['Metadata'])
+            st.session_state['active_data'] = pd.read_excel(xl_file)
+            st.success(f"Linked results to logic for {sel_id}")
 
 with t3:
-    if 'xl_file' in locals() and xl_file and in_aid in st.session_state['vault']:
-        df = pd.read_excel(xl_file)
-        meta = st.session_state['vault'][in_aid]['meta']
-        info = st.session_state['vault'][in_aid]['info']
+    if 'active_logic' in st.session_state:
+        st.header("Strategic Diagnostic Hub")
+        logic = st.session_state['active_logic']
+        data = st.session_state['active_data']
         
-        reports = []
-        for _, row in df.iterrows():
-            errors = []
-            for q in meta['questions']:
-                ans = str(row[f"Q{q['id']}"]).strip().upper()
-                if ans != q['correct']:
-                    errors.append({"q": q['id'], "gap": q['mappings'].get(ans, "Logic Gap"), "fix": q['remedy']})
-            reports.append({"name": row['Student Name'], "errors": errors})
+        student = st.selectbox("Select Student", data['Student Name'].unique())
+        s_row = data[data['Student Name'] == student].iloc[0]
         
-        # Principal's Summary Button
-        summary_pdf = agent_executive_dean(reports, info, u_school)
-        st.download_button("👑 Download Principal's Executive Summary (PDF)", summary_pdf, f"Principal_Report_{in_aid}.pdf")
-        
-        # UI Visuals
-        st.divider()
-        student = st.selectbox("Detailed Student Diagnosis", [r['name'] for r in reports])
-        rep = next(r for r in reports if r['name'] == student)
-        for e in rep['errors']:
-            st.markdown(f"<div class='diagnostic-card'><b>Q{e['q']}:</b> {e['gap']}<br><small>{e['fix']}</small></div>", unsafe_allow_html=True)
+        for q in logic['questions']:
+            ans = str(s_row[f"Q{q['id']}"]).strip().upper()
+            if ans != q['correct']:
+                mapping = q.get('mappings') or q.get('engine') or {}
+                st.markdown(f"<div class='diagnostic-card'><b>Q{q['id']}:</b> {mapping.get(ans, 'Logic Error')}<br><small>{q['remedy']}</small></div>", unsafe_allow_html=True)
+            else:
+                st.success(f"Q{q['id']} Mastered")
