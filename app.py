@@ -49,6 +49,37 @@ def agent_psychometrician(topic, grade, num_q):
     return json.loads(response.choices[0].message.content)
 
 # --- AGENT G: PORTFOLIO GENERATOR (PDF REPORTS) ---
+
+def create_class_report(info, gap_counts):
+    buf = BytesIO()
+    p = canvas.Canvas(buf, pagesize=A4)
+    p.setFillColor(colors.HexColor("#1e3a8a"))
+    p.rect(0, 750, 600, 100, fill=1, stroke=0)
+    p.setFillColor(colors.white)
+    p.setFont("Helvetica-Bold", 16)
+    p.drawString(50, 800, f"CLASS-WIDE MISCONCEPTION REPORT")
+    p.setFont("Helvetica", 10)
+    p.drawString(50, 780, f"Topic: {info['topic']} | Assessment ID: {info['aid']}")
+    
+    y = 700
+    p.setFillColor(colors.black)
+    p.setFont("Helvetica-Bold", 12)
+    p.drawString(50, y, "Top Systemic Gaps Found in Class:")
+    y -= 30
+    
+    for gap, count in gap_counts.items():
+        if y < 100: p.showPage(); y = 800
+        p.setFont("Helvetica-Bold", 11)
+        p.drawString(60, y, f"• {gap}")
+        y -= 15
+        p.setFont("Helvetica", 10)
+        p.drawString(70, y, f"Frequency: {count} students affected.")
+        y -= 25
+    
+    p.save()
+    buf.seek(0)
+    return buf
+
 def create_individual_report(student_name, errors, info):
     buf = BytesIO()
     p = canvas.Canvas(buf, pagesize=A4)
@@ -67,16 +98,16 @@ def create_individual_report(student_name, errors, info):
         p.drawString(50, y, "RESULT: 100% CONCEPTUAL MASTERY")
     else:
         for e in errors:
-            if y < 100: p.showPage(); y = 800
+            if y < 120: p.showPage(); y = 800
             p.setFont("Helvetica-Bold", 11)
-            p.drawString(50, y, f"Question {e['q']} Analysis:")
+            p.drawString(50, y, f"Question {e['q']} - Misconception Analysis:")
             y -= 15
-            p.setFont("Helvetica-Oblique", 10)
-            p.drawString(60, y, f"Thinking Error Detected: {e['gap']}")
+            p.setFont("Helvetica-Bold", 10)
+            p.drawString(60, y, f"Thinking Error: {e['gap']}")
             y -= 15
             p.setFont("Helvetica", 10)
             p.drawString(60, y, f"Remedial Advice: {e['fix']}")
-            y -= 30
+            y -= 35
     p.save()
     buf.seek(0)
     return buf
@@ -99,7 +130,6 @@ with t1:
         if table:
             table.create({"Assessment_ID": u_aid, "Metadata": json.dumps(meta), "Topic": u_topic, "School": u_school})
             st.success(f"Logic for {u_aid} synced.")
-            # Standard PDF Paper download logic here...
 
 with t2:
     table = get_airtable()
@@ -121,8 +151,7 @@ with t3:
         data = st.session_state['active_data']
         info = st.session_state['active_info']
         
-        # 1. Class-Wide Misconception Report
-        st.header("📊 Class-Wide Misconception Analysis")
+        # Process Reports
         reports = []
         all_gaps = []
         for _, row in data.iterrows():
@@ -135,12 +164,16 @@ with t3:
                     all_gaps.append(gap)
             reports.append({"name": row['Student Name'], "errors": errors})
         
+        st.header("📊 Class-Wide Misconception Report")
         if all_gaps:
             gap_counts = pd.Series(all_gaps).value_counts()
             st.bar_chart(gap_counts)
             
-            # 2. Remedial Grouping (Workshop Discussion)
-            st.subheader("🤝 Remedial Grouping for Discussion")
+            # --- DOWNLOAD CLASS REPORT ---
+            class_pdf = create_class_report(info, gap_counts)
+            st.download_button("📥 Download Class Misconception Report (PDF)", class_pdf, f"Class_Diagnosis_{info['aid']}.pdf")
+            
+            st.subheader("🤝 Remedial Grouping")
             clusters = {}
             for r in reports:
                 for e in r['errors']:
@@ -148,18 +181,18 @@ with t3:
             
             for gap, students in clusters.items():
                 with st.expander(f"🔴 Group: {gap} ({len(students)} Students)"):
-                    st.write(f"**Discussion Points:** Re-examine the logic behind this misconception with {', '.join(students)}.")
+                    st.write(f"**Discussion Focus:** {gap}")
+                    st.write(f"**Students:** {', '.join(students)}")
 
         st.divider()
 
-        # 3. Individual Report Generation (Downloadable)
+        # --- INDIVIDUAL REPORT SECTION ---
         st.subheader("👤 Individual Student Portfolios")
-        student = st.selectbox("Select Student to Download Report", [r['name'] for r in reports])
+        student = st.selectbox("Select Student", [r['name'] for r in reports])
         rep = next(r for r in reports if r['name'] == student)
         
-        pdf_report = create_individual_report(student, rep['errors'], info)
-        st.download_button(f"📥 Download Diagnostic Report for {student}", pdf_report, f"{student}_Diagnosis.pdf")
+        ind_pdf = create_individual_report(student, rep['errors'], info)
+        st.download_button(f"📥 Download Student Misconception Report for {student}", ind_pdf, f"{student}_Diagnosis.pdf")
         
-        # UI Display
         for e in rep['errors']:
-            st.markdown(f"<div class='diagnostic-card'><b>Q{e['q']} - Error</b><br><i>Gap:</i> {e['gap']}<br><small>{e['fix']}</small></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='diagnostic-card'><b>Q{e['q']}</b><br><i>Misconception:</i> {e['gap']}<br><small>{e['fix']}</small></div>", unsafe_allow_html=True)
